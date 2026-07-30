@@ -235,6 +235,8 @@
   const LIST_KEY = "invoice_tool_history_v1";
   const DB_NAME = "invoiceUploaderDB";
   const STORE_NAME = "handles";
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbynbqtmz4A8fCh-rQpwQVLoV2No8U4I1Te9jTJwmtZLB6DFaMdRmZnWtdOz3wTIUVuebw/exec";
+  const GAS_KEY = "shinkashiwa-invoice";
 
   const el = (id) => document.getElementById(id);
   const issueDateEl = el("issueDate"), siteSelectEl = el("siteSelect"), vendorEl = el("vendor"),
@@ -558,11 +560,32 @@
     try{ return JSON.parse(localStorage.getItem(LIST_KEY) || "[]"); }catch(e){ return []; }
   }
   function saveList(list){ localStorage.setItem(LIST_KEY, JSON.stringify(list)); }
+  function postToGas(entry, action){
+    if(!GAS_URL) return;
+    const payload = {
+      key: GAS_KEY,
+      action: action || "record",
+      dateStr: entry.dateStr || "",
+      site: entry.site || "",
+      vendor: entry.vendor || "",
+      amount: entry.amount || "",
+      filename: entry.filename || "",
+      folder: entry.folder || "",
+      method: entry.method || ""
+    };
+    // text/plain にすることでプリフライト(OPTIONS)を回避（GAS側はcontentsをJSON.parseするだけなので問題ない）
+    fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    }).catch(()=>{ /* 記録用スプレッドシートへの送信に失敗しても、ツール自体の動作は止めない */ });
+  }
   function addHistory(entry){
     const list = getList();
     list.unshift(entry);
     saveList(list);
     renderList();
+    postToGas(entry, "record");
   }
   function renderList(){
     const list = getList();
@@ -594,13 +617,20 @@
     const delIdx = e.target.getAttribute("data-del");
     if(delIdx !== null){
       const list = getList();
+      const removed = list[Number(delIdx)];
       list.splice(Number(delIdx), 1);
       saveList(list);
       renderList();
+      if(removed) postToGas(removed, "delete_one");
     }
   });
   el("clearListBtn").addEventListener("click", ()=>{
-    if(confirm("履歴を全て消去しますか？")){ saveList([]); renderList(); }
+    if(confirm("履歴を全て消去しますか？")){
+      const list = getList();
+      list.forEach(item => postToGas(item, "delete_all"));
+      saveList([]);
+      renderList();
+    }
   });
   el("downloadCsvBtn").addEventListener("click", ()=>{
     const list = getList();
