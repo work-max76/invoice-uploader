@@ -111,7 +111,7 @@
 <div class="wrap">
   <header>
     <h1>請求書アップロード支援ツール</h1>
-    <p>【請求書発行日(YYMMDD)】_【拠点名】_【取引先名】_【金額(税込)】.pdf の名前で、選択したPDFを共有フォルダへそのまま保存（アップロード）できます。対応ブラウザは Google Chrome / Microsoft Edge です。</p>
+    <p>【請求書発行月(YYMM)】_【拠点名】_【取引先名】_【金額(税込)】.pdf の名前で、選択したPDFを共有フォルダへそのまま保存（アップロード）できます。対応ブラウザは Google Chrome / Microsoft Edge です。</p>
   </header>
 
   <div id="unsupportedBanner" class="unsupported-banner" style="display:none;">
@@ -128,7 +128,7 @@
       <button class="btn" id="chooseFolderBtn">共有フォルダ（ルート）を選択</button>
       <button class="btn secondary" id="rescanBtn">保存先フォルダを再確認</button>
     </div>
-    <p class="file-hint">選択したフォルダの中に「年月／拠点名」のサブフォルダを自動作成し、その中に保存します（例：選択フォルダ ＞ 2026年7月 ＞ 本社 ＞ ファイル）。フォルダは請求書発行日と選んだ拠点名から自動判定されます。次回以降は選択したルートフォルダが自動で読み込まれます。フォルダのパス自体はブラウザの仕様上表示されません。</p>
+    <p class="file-hint">選択したフォルダの中に「年月／拠点名」のサブフォルダを自動作成し、その中に保存します（例：選択フォルダ ＞ 2026年7月 ＞ 本社 ＞ ファイル）。フォルダは請求書発行月と選んだ拠点名から自動判定されます。次回以降は選択したルートフォルダが自動で読み込まれます。フォルダのパス自体はブラウザの仕様上表示されません。</p>
     <div class="folder-status" id="targetFolderStatus" style="margin-top:10px; display:none;">
       <span class="dot"></span>
       <span id="targetFolderText"></span>
@@ -139,8 +139,8 @@
     <h2>2. 情報を入力してPDFを選択</h2>
     <div class="row">
       <div class="field">
-        <label for="issueDate">請求書発行日</label>
-        <input type="date" id="issueDate">
+        <label for="issueDate">請求書発行月</label>
+        <input type="month" id="issueDate">
       </div>
       <div class="field">
         <label for="siteSelect">拠点名</label>
@@ -150,8 +150,8 @@
     </div>
     <div class="row">
       <div class="field">
-        <label for="vendor">取引先名（略称で統一）</label>
-        <input type="text" id="vendor" list="vendorDatalist" placeholder="例：〇〇商事" autocomplete="off">
+        <label for="vendor">取引先名（正式名称）</label>
+        <input type="text" id="vendor" list="vendorDatalist" placeholder="例：〇〇商事株式会社" autocomplete="off">
         <datalist id="vendorDatalist"></datalist>
       </div>
       <div class="field">
@@ -168,14 +168,14 @@
       </div>
     </div>
     <div class="actions" style="margin-top:0;">
-      <button class="btn secondary" id="autoFillBtn">PDFから発行日・金額・取引先名を自動入力（実験的）</button>
+      <button class="btn secondary" id="autoFillBtn">PDFから発行月・金額・取引先名を自動入力（実験的）</button>
     </div>
     <p class="file-hint">文字情報を持つPDF（WEB発行のPDF等）はある程度読み取れますが、紙をスキャンした画像PDFは読み取れません。自動入力された値は必ず目視で確認・修正してください。</p>
 
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
-      <textarea id="vendorListArea" placeholder="1行に1取引先名を入力（例：〇〇商事）"></textarea>
-      <p>登録すると、取引先名欄への入力時に候補として表示されます（クリックで選択も、新しい取引先の自由入力も可能です）。表記ゆれ防止のため、略称ルールに従った名称で登録してください。</p>
+      <textarea id="vendorListArea" placeholder="1行に1取引先名を入力（例：〇〇商事株式会社）"></textarea>
+      <p>登録すると、取引先名欄への入力時に候補として表示されます（クリックで選択も、新しい取引先の自由入力も可能です）。表記ゆれ防止のため、正式名称で登録してください。</p>
       <div class="actions">
         <button class="btn secondary" id="saveVendors">リストを保存</button>
         <button class="btn secondary" id="clearVendors">リストを空にする</button>
@@ -186,7 +186,7 @@
   <div class="card">
     <h2>3. ファイル名の確認とアップロード</h2>
     <div class="preview-box" id="previewBox">
-      <span class="fname" id="previewText">請求書発行日・拠点名・取引先名・金額・PDFを入力してください</span>
+      <span class="fname" id="previewText">請求書発行月・拠点名・取引先名・金額・PDFを入力してください</span>
       <button class="copy-btn" id="copyBtn">名前だけコピー</button>
     </div>
     <div class="msg-list" id="msgList"></div>
@@ -201,7 +201,7 @@
     <h2>4. 処理履歴</h2>
     <table>
       <thead>
-        <tr><th>日時</th><th>発行日</th><th>拠点名</th><th>取引先名</th><th>金額</th><th>ファイル名</th><th>保存先フォルダ</th><th>方法</th><th></th></tr>
+        <tr><th>日時</th><th>発行月</th><th>拠点名</th><th>取引先名</th><th>金額</th><th>ファイル名</th><th>保存先フォルダ</th><th>方法</th><th></th></tr>
       </thead>
       <tbody id="listBody">
         <tr class="empty-row"><td colspan="9">まだ処理履歴はありません</td></tr>
@@ -314,7 +314,7 @@
     folderStatus.classList.toggle("unset", !ok);
   }
 
-  // 発行日・拠点名から「年月/拠点名」のサブフォルダパスを決定する（例：2026年7月／本社）
+  // 発行月・拠点名から「年月/拠点名」のサブフォルダパスを決定する（例：2026年7月／本社）
   function folderPathParts(){
     const dateVal = issueDateEl.value;
     const site = stripForbidden(sanitize(siteSelectEl.value));
@@ -338,7 +338,7 @@
     targetFolderStatus.classList.toggle("unset", !ok);
   }
 
-  // 発行日・拠点名が確定したら、保存先サブフォルダを（作成はせず）確認し、重複チェック用の一覧を更新する
+  // 発行月・拠点名が確定したら、保存先サブフォルダを（作成はせず）確認し、重複チェック用の一覧を更新する
   async function updateTargetFolder(){
     existingNames = new Set();
     targetDirHandle = null;
@@ -458,10 +458,12 @@
   }
 
   // ---- Filename logic ----
-  function toYYMMDD(dateStr){
+  // input type="month" の値（"YYYY-MM"）を YYMM 形式に変換する
+  function toYYMM(dateStr){
     if(!dateStr) return "";
-    const [y,m,d] = dateStr.split("-");
-    return y.slice(2) + m + d;
+    const [y,m] = dateStr.split("-");
+    if(!y || !m) return "";
+    return y.slice(2) + m;
   }
   function sanitize(str){ return (str || "").trim(); }
   function hasForbidden(str){ FORBIDDEN.lastIndex = 0; return FORBIDDEN.test(str || ""); }
@@ -484,7 +486,7 @@
   });
 
   function currentFilename(){
-    const dateStr = toYYMMDD(issueDateEl.value);
+    const dateStr = toYYMM(issueDateEl.value);
     const site = stripForbidden(sanitize(siteSelectEl.value));
     const vendor = stripForbidden(sanitize(vendorEl.value));
     const amount = amountEl.value.trim();
@@ -504,7 +506,7 @@
     uploadBtn.classList.toggle("btn-dim", !(data.filled && hasFile && supportsFS && folderHandle));
 
     if(!data.filled){
-      previewText.textContent = "請求書発行日・拠点名・取引先名・金額・PDFを入力してください";
+      previewText.textContent = "請求書発行月・拠点名・取引先名・金額・PDFを入力してください";
       return;
     }
 
@@ -649,7 +651,7 @@
   el("downloadCsvBtn").addEventListener("click", ()=>{
     const list = getList();
     if(list.length === 0){ showToast("履歴がありません"); return; }
-    const header = "日時,発行日,拠点名,取引先名,金額,ファイル名,保存先フォルダ,方法\n";
+    const header = "日時,発行月,拠点名,取引先名,金額,ファイル名,保存先フォルダ,方法\n";
     const rows = list.map(i => `${i.time},${i.dateStr},${i.site},${i.vendor},${i.amount},${i.filename},${i.folder || ""},${i.method}`).join("\n");
     const csv = "﻿" + header + rows;
     const blob = new Blob([csv], {type: "text/csv;charset=utf-8;"});
@@ -670,7 +672,7 @@
     if(!folderHandle){ showToast("先に共有フォルダを選択してください"); return; }
 
     const parts = folderPathParts();
-    if(!parts){ showToast("請求書発行日と拠点名を入力してください"); return; }
+    if(!parts){ showToast("請求書発行月と拠点名を入力してください"); return; }
 
     const ok = await verifyPermission(folderHandle, "readwrite");
     if(!ok){ showToast("フォルダへの書き込み許可が必要です"); return; }
@@ -811,9 +813,9 @@
       const vendorC = extractVendorCandidate(text);
       let filledAny = false;
 
-      if(dateC && dateC.mo >= 1 && dateC.mo <= 12 && dateC.d >= 1 && dateC.d <= 31){
-        const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0"), d = String(dateC.d).padStart(2,"0");
-        issueDateEl.value = `${y}-${mo}-${d}`;
+      if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
+        const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
+        issueDateEl.value = `${y}-${mo}`;
         filledAny = true;
       }
       if(amountC){
@@ -827,9 +829,9 @@
       }
 
       if(filledAny){
-        addMsg("warn", "PDFの文字情報から自動推定した値です。発行日・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
+        addMsg("warn", "PDFの文字情報から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
       } else {
-        addMsg("warn", "PDFから発行日・金額・取引先名を自動推定できませんでした。手動で入力してください。");
+        addMsg("warn", "PDFから発行月・金額・取引先名を自動推定できませんでした。手動で入力してください。");
       }
       await updateTargetFolder();
       updatePreview();
@@ -842,7 +844,7 @@
   renderSiteSelect();
   renderVendorList();
   renderList();
-  issueDateEl.value = new Date().toISOString().slice(0,10);
+  issueDateEl.value = new Date().toISOString().slice(0,7);
   restoreFolder().then(updatePreview);
   updatePreview();
 })();
