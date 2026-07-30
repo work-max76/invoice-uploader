@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>請求書アップロード支援ツール</title>
+<title>請求書アップロードツール</title>
 <style>
   :root{
     --navy:#1F3864; --blue:#2E5395; --blue-light:#EAF0FA; --bg:#F4F6FA;
@@ -110,12 +110,12 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>請求書アップロード支援ツール</h1>
+    <h1>請求書アップロードツール</h1>
     <p>【請求書発行月(YYMM)】_【拠点名】_【取引先名】_【金額(税込)】.pdf の名前で、選択したPDFを共有フォルダへそのまま保存（アップロード）できます。対応ブラウザは Google Chrome / Microsoft Edge です。</p>
   </header>
 
   <div id="unsupportedBanner" class="unsupported-banner" style="display:none;">
-    お使いのブラウザは共有フォルダへの自動保存に対応していません。Google Chrome または Microsoft Edge で開いてください。それ以外のブラウザでは「名前を変えてダウンロード」機能のみご利用いただけます。
+    お使いのブラウザは共有フォルダへの自動保存に対応していません。Google Chrome または Microsoft Edge で開いてください。
   </div>
 
   <div class="card">
@@ -186,13 +186,11 @@
   <div class="card">
     <h2>3. ファイル名の確認とアップロード</h2>
     <div class="preview-box" id="previewBox">
-      <span class="fname" id="previewText">請求書発行月・拠点名・取引先名・金額・PDFを入力してください</span>
-      <button class="copy-btn" id="copyBtn">名前だけコピー</button>
+      <span class="fname" id="previewText">請求書発行月・拠点名・取引先名・金額・PDFを確認してください</span>
     </div>
     <div class="msg-list" id="msgList"></div>
     <div class="actions">
       <button class="btn big" id="uploadBtn">共有フォルダへアップロード</button>
-      <button class="btn secondary" id="downloadBtn">名前を変えてダウンロード</button>
       <button class="btn secondary" id="clearFormBtn">入力をクリア</button>
     </div>
   </div>
@@ -259,7 +257,7 @@
         pdfFileEl = el("pdfFile"), fileHint = el("fileHint"),
         folderStatus = el("folderStatus"), folderStatusText = el("folderStatusText"),
         targetFolderStatus = el("targetFolderStatus"), targetFolderText = el("targetFolderText"),
-        uploadBtn = el("uploadBtn"), downloadBtn = el("downloadBtn");
+        uploadBtn = el("uploadBtn");
 
   const supportsFS = ("showDirectoryPicker" in window);
   if(!supportsFS){
@@ -378,8 +376,16 @@
 
   el("rescanBtn").addEventListener("click", async ()=>{
     if(!folderHandle){ showToast("先にフォルダを選択してください"); return; }
+    // ボタンのクリック操作の中で呼ぶことで、ブラウザのアクセス許可確認が正しく機能する
+    // （ページ読み込み時の自動チェックだけでは、ブラウザの仕様上アクセス許可を再取得できないため）
+    const ok = await verifyPermission(folderHandle, "read");
+    if(ok){
+      setFolderStatus("連携フォルダ：" + folderHandle.name + "（この中に年度／月／拠点名のサブフォルダを作成します）", true);
+    } else {
+      setFolderStatus("連携フォルダ：" + folderHandle.name + "（アクセス許可待ち。もう一度「保存先フォルダを再確認」を押してください）", false);
+    }
     await updateTargetFolder();
-    showToast("保存先フォルダを再読込しました（" + existingNames.size + "件のファイル）");
+    showToast(ok ? ("保存先フォルダを再読込しました（" + existingNames.size + "件のファイル）") : "アクセスが許可されませんでした");
     updatePreview();
   });
 
@@ -388,13 +394,16 @@
     try{
       const handle = await idbGet("shareFolder");
       if(handle){
-        const ok = await verifyPermission(handle, "read");
         folderHandle = handle;
-        if(ok){
+        // ページ読み込み時はユーザー操作（クリック）が伴わないため、ブラウザの仕様上
+        // ここでアクセス許可を再取得すること（requestPermission）はできない。
+        // そのため現在の許可状況の確認（queryPermission）のみ行う。
+        const granted = (await handle.queryPermission({ mode: "read" })) === "granted";
+        if(granted){
           setFolderStatus("連携フォルダ：" + handle.name + "（この中に年度／月／拠点名のサブフォルダを作成します）", true);
           await updateTargetFolder();
         } else {
-          setFolderStatus("連携フォルダ：" + handle.name + "（アクセス許可待ち。「共有フォルダ（ルート）を選択」を押して再許可してください）", false);
+          setFolderStatus("連携フォルダ：" + handle.name + "（アクセス許可待ち。「保存先フォルダを再確認」を押してください）", false);
         }
       }
     }catch(e){ /* no handle stored yet */ }
@@ -502,11 +511,10 @@
 
     // ボタンはどんな状態でも常にクリックできるようにし（disabled属性は使わない）、
     // 不足があればクリック時にその場で理由を案内する。ここでは見た目のヒントのみ変える。
-    downloadBtn.classList.toggle("btn-dim", !(data.filled && hasFile));
     uploadBtn.classList.toggle("btn-dim", !(data.filled && hasFile && supportsFS && folderHandle));
 
     if(!data.filled){
-      previewText.textContent = "請求書発行月・拠点名・取引先名・金額・PDFを入力してください";
+      previewText.textContent = "請求書発行月・拠点名・取引先名・金額・PDFを確認してください";
       return;
     }
 
@@ -525,10 +533,10 @@
     }
 
     if(!hasFile){
-      addMsg("warn", "アップロード／ダウンロードには請求書PDFの選択が必要です（上の「請求書PDFファイル」から選んでください）。");
+      addMsg("warn", "アップロードには請求書PDFの選択が必要です（上の「請求書PDFファイル」から選んでください）。");
     }
     if(!supportsFS){
-      addMsg("danger", "このブラウザは共有フォルダへの保存に対応していません。Google ChromeまたはMicrosoft Edgeで開き直してください（「名前を変えてダウンロード」は引き続き使えます）。");
+      addMsg("danger", "このブラウザは共有フォルダへの保存に対応していません。Google ChromeまたはMicrosoft Edgeで開き直してください。");
     } else if(!folderHandle){
       addMsg("warn", "共有フォルダが未設定のため、まだアップロードできません（上部「1. 共有フォルダの設定」で選択してください）。");
     }
@@ -546,23 +554,6 @@
     toast.classList.add("show");
     setTimeout(()=> toast.classList.remove("show"), 1800);
   }
-
-  function copyText(text){
-    if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(text).then(()=>showToast("コピーしました")).catch(()=>fallbackCopy(text));
-    } else { fallbackCopy(text); }
-  }
-  function fallbackCopy(text){
-    const ta = document.createElement("textarea");
-    ta.value = text; document.body.appendChild(ta); ta.select();
-    try{ document.execCommand("copy"); showToast("コピーしました"); }catch(e){ showToast("コピーに失敗しました"); }
-    document.body.removeChild(ta);
-  }
-
-  el("copyBtn").addEventListener("click", ()=>{
-    const data = currentFilename();
-    if(data.filled) copyText(data.filename); else showToast("入力が不足しています");
-  });
 
   el("clearFormBtn").addEventListener("click", ()=>{
     vendorEl.value = ""; amountEl.value = ""; amountHintEl.textContent = "";
@@ -704,25 +695,6 @@
     }catch(e){
       showToast("アップロードに失敗しました：" + e.message);
     }
-  });
-
-  downloadBtn.addEventListener("click", async ()=>{
-    const data = currentFilename();
-    if(!data.filled){ showToast("入力が不足しています"); return; }
-    const file = pdfFileEl.files[0];
-    if(!file){ showToast("PDFファイルを選択してください"); return; }
-
-    const buf = await file.arrayBuffer();
-    const blob = new Blob([buf], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = data.filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    showToast("ダウンロードしました。共有フォルダへ手動で移動してください。");
-    addHistory({ time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor, amount: data.amount, filename: data.filename, method: "download" });
-    rememberVendor(data.vendor);
   });
 
   // ---- PDF auto-read (experimental) ----
