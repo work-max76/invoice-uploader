@@ -228,7 +228,7 @@
 <script>
 (function(){
   const DEFAULT_SITES = [
-    "本社","インター","大青田","ロジック柏","十余二南","通販","流山駒木","柏の葉","野田船形",
+    "本社","柏インター","大青田","ロジック柏","十余二南","通販","流山駒木","柏の葉","野田船形",
     "三ツ堀","泉第2","泉第1","幕張","営業","事務センター"
   ];
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
@@ -237,6 +237,19 @@
   const STORE_NAME = "handles";
   const GAS_URL = "https://script.google.com/macros/s/AKfycbynbqtmz4A8fCh-rQpwQVLoV2No8U4I1Te9jTJwmtZLB6DFaMdRmZnWtdOz3wTIUVuebw/exec";
   const GAS_KEY = "shinkashiwa-invoice";
+
+  // Cloudflare Access でログイン中のメールアドレスを取得（未対応環境では空のまま）
+  let currentUserEmail = "";
+  async function loadAccessIdentity(){
+    try{
+      const res = await fetch("/cdn-cgi/access/get-identity", { credentials: "include" });
+      if(res.ok){
+        const info = await res.json();
+        currentUserEmail = info.email || "";
+      }
+    }catch(e){ /* Cloudflare Access配下以外（ローカル確認時等）では取得できないため無視 */ }
+  }
+  loadAccessIdentity();
 
   const el = (id) => document.getElementById(id);
   const issueDateEl = el("issueDate"), siteSelectEl = el("siteSelect"), vendorEl = el("vendor"),
@@ -571,7 +584,8 @@
       amount: entry.amount || "",
       filename: entry.filename || "",
       folder: entry.folder || "",
-      method: entry.method || ""
+      method: entry.method || "",
+      operator: currentUserEmail || ""
     };
     // text/plain にすることでプリフライト(OPTIONS)を回避（GAS側はcontentsをJSON.parseするだけなので問題ない）
     fetch(GAS_URL, {
