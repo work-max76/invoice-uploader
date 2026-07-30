@@ -207,7 +207,6 @@
     </table>
     <div class="actions">
       <button class="btn secondary" id="downloadCsvBtn">履歴をCSVでダウンロード</button>
-      <button class="btn secondary" id="clearListBtn">履歴を全消去</button>
     </div>
   </div>
 
@@ -629,14 +628,6 @@
       saveList(list);
       renderList();
       if(removed) postToGas(removed, "delete_one");
-    }
-  });
-  el("clearListBtn").addEventListener("click", ()=>{
-    if(confirm("履歴を全て消去しますか？")){
-      const list = getList();
-      list.forEach(item => postToGas(item, "delete_all"));
-      saveList([]);
-      renderList();
     }
   });
   el("downloadCsvBtn").addEventListener("click", ()=>{
