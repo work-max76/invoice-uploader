@@ -150,6 +150,13 @@
     </div>
     <div class="row">
       <div class="field">
+        <label for="submitterName">担当者名（申請者）</label>
+        <input type="text" id="submitterName" placeholder="例：山田太郎" autocomplete="off">
+        <div class="file-hint">共有アドレスでログインしている場合も、実際にアップロードした方の氏名を入力してください。</div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
         <label for="vendor">取引先名（正式名称）</label>
         <input type="text" id="vendor" list="vendorDatalist" placeholder="例：〇〇商事株式会社" autocomplete="off">
         <datalist id="vendorDatalist"></datalist>
@@ -186,7 +193,7 @@
   <div class="card">
     <h2>3. ファイル名の確認とアップロード</h2>
     <div class="preview-box" id="previewBox">
-      <span class="fname" id="previewText">請求書発行月・拠点名・取引先名・金額・PDFを確認してください</span>
+      <span class="fname" id="previewText">請求書発行月・拠点名・担当者名・取引先名・金額・PDFを確認してください</span>
     </div>
     <div class="msg-list" id="msgList"></div>
     <div class="actions">
@@ -199,10 +206,10 @@
     <h2>4. 処理履歴</h2>
     <table>
       <thead>
-        <tr><th>日時</th><th>発行月</th><th>拠点名</th><th>取引先名</th><th>金額</th><th>ファイル名</th><th>保存先フォルダ</th><th>方法</th><th></th></tr>
+        <tr><th>日時</th><th>発行月</th><th>拠点名</th><th>担当者名</th><th>取引先名</th><th>金額</th><th>ファイル名</th><th>保存先フォルダ</th><th>方法</th><th></th></tr>
       </thead>
       <tbody id="listBody">
-        <tr class="empty-row"><td colspan="9">まだ処理履歴はありません</td></tr>
+        <tr class="empty-row"><td colspan="10">まだ処理履歴はありません</td></tr>
       </tbody>
     </table>
     <div class="actions">
@@ -250,6 +257,7 @@
 
   const el = (id) => document.getElementById(id);
   const issueDateEl = el("issueDate"), siteSelectEl = el("siteSelect"), vendorEl = el("vendor"),
+        submitterNameEl = el("submitterName"),
         amountEl = el("amount"), amountHintEl = el("amountHint"),
         previewBox = el("previewBox"), previewText = el("previewText"), msgList = el("msgList"),
         listBody = el("listBody"), toast = el("toast"),
@@ -483,7 +491,7 @@
     amountHintEl.textContent = digits ? Number(digits).toLocaleString("ja-JP") + " 円（税込）" : "";
     updatePreview();
   });
-  [issueDateEl, siteSelectEl, vendorEl].forEach(e=> e.addEventListener("input", updatePreview));
+  [issueDateEl, siteSelectEl, vendorEl, submitterNameEl].forEach(e=> e.addEventListener("input", updatePreview));
   [issueDateEl, siteSelectEl].forEach(e=> e.addEventListener("change", ()=>{
     updateTargetFolder().then(updatePreview);
   }));
@@ -498,9 +506,10 @@
     const site = stripForbidden(sanitize(siteSelectEl.value));
     const vendor = stripForbidden(sanitize(vendorEl.value));
     const amount = amountEl.value.trim();
-    const filled = !!(dateStr && site && vendor && amount);
+    const submitter = sanitize(submitterNameEl.value);
+    const filled = !!(dateStr && site && vendor && amount && submitter);
     const filename = filled ? `${dateStr}_${site}_${vendor}_${amount}.pdf` : null;
-    return {dateStr, site, vendor, amount, filled, filename};
+    return {dateStr, site, vendor, amount, submitter, filled, filename};
   }
 
   function updatePreview(){
@@ -513,7 +522,7 @@
     uploadBtn.classList.toggle("btn-dim", !(data.filled && hasFile && supportsFS && folderHandle));
 
     if(!data.filled){
-      previewText.textContent = "請求書発行月・拠点名・取引先名・金額・PDFを確認してください";
+      previewText.textContent = "請求書発行月・拠点名・担当者名・取引先名・金額・PDFを確認してください";
       return;
     }
 
@@ -577,7 +586,8 @@
       filename: entry.filename || "",
       folder: entry.folder || "",
       method: entry.method || "",
-      operator: currentUserEmail || ""
+      operator: currentUserEmail || "",
+      submitter: entry.submitter || ""
     };
     // text/plain にすることでプリフライト(OPTIONS)を回避（GAS側はcontentsをJSON.parseするだけなので問題ない）
     fetch(GAS_URL, {
@@ -597,7 +607,7 @@
     const list = getList();
     listBody.innerHTML = "";
     if(list.length === 0){
-      listBody.innerHTML = `<tr class="empty-row"><td colspan="9">まだ処理履歴はありません</td></tr>`;
+      listBody.innerHTML = `<tr class="empty-row"><td colspan="10">まだ処理履歴はありません</td></tr>`;
       return;
     }
     list.forEach((item, idx)=>{
@@ -609,6 +619,7 @@
         <td>${(item.time||"").replace("T"," ").slice(0,16)}</td>
         <td>${item.dateStr}</td>
         <td>${item.site}</td>
+        <td>${item.submitter || "-"}</td>
         <td>${item.vendor}</td>
         <td>${Number(item.amount).toLocaleString("ja-JP")}</td>
         <td class="fname">${item.filename}</td>
@@ -633,8 +644,8 @@
   el("downloadCsvBtn").addEventListener("click", ()=>{
     const list = getList();
     if(list.length === 0){ showToast("履歴がありません"); return; }
-    const header = "日時,発行月,拠点名,取引先名,金額,ファイル名,保存先フォルダ,方法\n";
-    const rows = list.map(i => `${i.time},${i.dateStr},${i.site},${i.vendor},${i.amount},${i.filename},${i.folder || ""},${i.method}`).join("\n");
+    const header = "日時,発行月,拠点名,担当者名,取引先名,金額,ファイル名,保存先フォルダ,方法\n";
+    const rows = list.map(i => `${i.time},${i.dateStr},${i.site},${i.submitter || ""},${i.vendor},${i.amount},${i.filename},${i.folder || ""},${i.method}`).join("\n");
     const csv = "﻿" + header + rows;
     const blob = new Blob([csv], {type: "text/csv;charset=utf-8;"});
     const url = URL.createObjectURL(blob);
@@ -680,7 +691,7 @@
       existingNames.add(data.filename);
       targetDirHandle = subDir;
       showToast("アップロードしました：" + parts.join(" ＞ ") + " ＞ " + data.filename);
-      addHistory({ time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor, amount: data.amount, filename: data.filename, method: "upload", folder: parts.join("/") });
+      addHistory({ time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor, amount: data.amount, filename: data.filename, method: "upload", folder: parts.join("/"), submitter: data.submitter });
       rememberVendor(data.vendor);
       el("clearFormBtn").click();
     }catch(e){
