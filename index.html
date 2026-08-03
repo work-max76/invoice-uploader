@@ -175,10 +175,9 @@
       </div>
     </div>
     <div class="actions" style="margin-top:0;">
-      <button class="btn secondary" id="autoFillBtn">PDFから発行月・金額・取引先名を自動入力（実験的）</button>
-      <button class="btn secondary" id="ocrBtn">スキャンPDFをGoogle OCRで読み取る（実験的）</button>
+      <button class="btn secondary" id="ocrBtn">PDFから発行月・金額・取引先名を自動入力（Google OCR）</button>
     </div>
-    <p class="file-hint">文字情報を持つPDF（WEB発行のPDF等）は上のボタンである程度読み取れますが、紙をスキャンした画像PDFは読み取れません。その場合は「Google OCRで読み取る」をお試しください（PDFを読み取りのため一時的にGoogleドライブへ送信し、読み取り後すぐに削除します）。いずれの場合も、自動入力された値は必ず目視で確認・修正してください。</p>
+    <p class="file-hint">Google OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します（読み取りのため一時的にGoogleドライブへ送信し、読み取り後すぐに削除します）。自動入力された値は必ず目視で確認・修正してください。</p>
 
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
@@ -229,7 +228,6 @@
 
 
 
-<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script>
 (function(){
   const DEFAULT_SITES = [
@@ -700,30 +698,7 @@
     }
   });
 
-  // ---- PDF auto-read (experimental) ----
-  const supportsPdfJs = (typeof pdfjsLib !== "undefined");
-  if(!supportsPdfJs){ el("autoFillBtn").disabled = true; }
-
-  let pdfWorkerReady = false;
-  async function ensurePdfWorker(){
-    if(pdfWorkerReady) return;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
-    pdfWorkerReady = true;
-  }
-
-  async function extractTextFromPdf(file){
-    const buf = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-    let text = "";
-    const maxPages = Math.min(pdf.numPages, 5); // 先頭5ページまで解析すれば十分
-    for(let p = 1; p <= maxPages; p++){
-      const page = await pdf.getPage(p);
-      const content = await page.getTextContent();
-      text += content.items.map(it => it.str).join(" ") + "\n";
-    }
-    return text;
-  }
-
+  // ---- PDF読み取り結果からの候補抽出（Google OCRの結果テキストに対して使用） ----
   function extractDateCandidate(text){
     let m = text.match(/令和\s*(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
     if(m) return { y: 2018 + parseInt(m[1],10), mo: parseInt(m[2],10), d: parseInt(m[3],10) };
@@ -771,53 +746,9 @@
     return candidates[0].name.replace(/(株式会社|有限会社|合同会社|㈱|㈲)/, "").trim();
   }
 
-  el("autoFillBtn").addEventListener("click", async ()=>{
-    if(!supportsPdfJs){ showToast("この機能は利用できません"); return; }
-    const file = pdfFileEl.files[0];
-    if(!file){ showToast("先にPDFファイルを選択してください"); return; }
-    showToast("PDFを解析しています…");
-    try{
-      await ensurePdfWorker();
-      const text = await extractTextFromPdf(file);
-      if(!text || text.replace(/\s/g, "").length < 10){
-        addMsg("warn", "このPDFは画像（スキャン）のため文字を読み取れませんでした。手動で入力してください。");
-        return;
-      }
-      const dateC = extractDateCandidate(text);
-      const amountC = extractAmountCandidate(text);
-      const vendorC = extractVendorCandidate(text);
-      let filledAny = false;
-
-      if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
-        const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
-        issueDateEl.value = `${y}-${mo}`;
-        filledAny = true;
-      }
-      if(amountC){
-        amountEl.value = String(amountC);
-        amountHintEl.textContent = Number(amountC).toLocaleString("ja-JP") + " 円（税込・自動推定）";
-        filledAny = true;
-      }
-      if(vendorC){
-        vendorEl.value = vendorC;
-        filledAny = true;
-      }
-
-      if(filledAny){
-        addMsg("warn", "PDFの文字情報から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
-      } else {
-        addMsg("warn", "PDFから発行月・金額・取引先名を自動推定できませんでした。手動で入力してください。");
-      }
-      await updateTargetFolder();
-      updatePreview();
-    }catch(e){
-      addMsg("danger", "PDFの解析に失敗しました：" + e.message + "。手動で入力してください。");
-    }
-  });
-
   // ---- Google OCR (experimental) ----
-  // スキャン画像PDFなど、pdf.jsでは文字を読み取れないPDF向けの補助機能。
-  // 選択したPDFをGAS経由でGoogleドライブの無料OCRに一時的に送信し、テキスト化する。
+  // 選択したPDFをGAS経由でGoogleドライブの無料OCRに一時的に送信してテキスト化し、
+  // 発行月・金額・取引先名の自動入力に使う。文字情報を持つPDF・スキャン画像PDFの両方に対応。
   function fileToBase64(file){
     return new Promise((resolve, reject)=>{
       const reader = new FileReader();
