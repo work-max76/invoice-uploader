@@ -176,8 +176,9 @@
     </div>
     <div class="actions" style="margin-top:0;">
       <button class="btn secondary" id="autoFillBtn">PDFから発行月・金額・取引先名を自動入力（実験的）</button>
+      <button class="btn secondary" id="ocrBtn">スキャンPDFをGoogle OCRで読み取る（実験的）</button>
     </div>
-    <p class="file-hint">文字情報を持つPDF（WEB発行のPDF等）はある程度読み取れますが、紙をスキャンした画像PDFは読み取れません。自動入力された値は必ず目視で確認・修正してください。</p>
+    <p class="file-hint">文字情報を持つPDF（WEB発行のPDF等）は上のボタンである程度読み取れますが、紙をスキャンした画像PDFは読み取れません。その場合は「Google OCRで読み取る」をお試しください（PDFを読み取りのため一時的にGoogleドライブへ送信し、読み取り後すぐに削除します）。いずれの場合も、自動入力された値は必ず目視で確認・修正してください。</p>
 
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
@@ -218,7 +219,7 @@
   </div>
 
   <footer>
-    社内利用ツール／すべての処理はこの端末とブラウザ内で完結し、選択したファイルが外部サーバーへ送信されることはありません。
+    社内利用ツール／通常の処理はこの端末とブラウザ内で完結し、選択したファイルが外部サーバーへ送信されることはありません。ただし「Google OCRで読み取る」ボタンを使用した場合のみ、読み取りのためPDFがGoogleドライブへ一時的に送信されます（読み取り後すぐに削除されます）。
   </footer>
 </div>
 
@@ -233,7 +234,7 @@
 (function(){
   const DEFAULT_SITES = [
     "本社","柏インター","大青田","ロジック柏","十余二南","通販","流山駒木","柏の葉","野田船形",
-    "三ツ堀","泉第2","泉第1","幕張","賃貸","事務センター"
+    "三ツ堀","泉第2","泉第1","幕張","営業","事務センター"
   ];
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
@@ -811,6 +812,84 @@
       updatePreview();
     }catch(e){
       addMsg("danger", "PDFの解析に失敗しました：" + e.message + "。手動で入力してください。");
+    }
+  });
+
+  // ---- Google OCR (experimental) ----
+  // スキャン画像PDFなど、pdf.jsでは文字を読み取れないPDF向けの補助機能。
+  // 選択したPDFをGAS経由でGoogleドライブの無料OCRに一時的に送信し、テキスト化する。
+  function fileToBase64(file){
+    return new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=> resolve(String(reader.result).split(",")[1] || "");
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function ocrViaGas(file){
+    const base64 = await fileToBase64(file);
+    const payload = {
+      key: GAS_KEY,
+      action: "ocr",
+      fileBase64: base64,
+      mimeType: file.type || "application/pdf",
+      filename: file.name || "invoice.pdf"
+    };
+    const res = await fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error("サーバーエラー（" + res.status + "）");
+    const json = await res.json();
+    if(!json.ok) throw new Error(json.error || "OCRに失敗しました");
+    return json.text || "";
+  }
+
+  el("ocrBtn").addEventListener("click", async ()=>{
+    const file = pdfFileEl.files[0];
+    if(!file){ showToast("先にPDFファイルを選択してください"); return; }
+    const btn = el("ocrBtn");
+    btn.disabled = true;
+    showToast("Google OCRで読み取っています…（時間がかかる場合があります）");
+    try{
+      const text = await ocrViaGas(file);
+      if(!text || text.replace(/\s/g, "").length < 10){
+        addMsg("warn", "OCRでも文字を読み取れませんでした。手動で入力してください。");
+        return;
+      }
+      const dateC = extractDateCandidate(text);
+      const amountC = extractAmountCandidate(text);
+      const vendorC = extractVendorCandidate(text);
+      let filledAny = false;
+
+      if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
+        const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
+        issueDateEl.value = `${y}-${mo}`;
+        filledAny = true;
+      }
+      if(amountC){
+        amountEl.value = String(amountC);
+        amountHintEl.textContent = Number(amountC).toLocaleString("ja-JP") + " 円（税込・OCRによる自動推定）";
+        filledAny = true;
+      }
+      if(vendorC){
+        vendorEl.value = vendorC;
+        filledAny = true;
+      }
+
+      if(filledAny){
+        addMsg("warn", "Google OCRで読み取った文字から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
+      } else {
+        addMsg("warn", "OCRでは読み取れましたが、発行月・金額・取引先名を自動推定できませんでした。手動で入力してください。");
+      }
+      await updateTargetFolder();
+      updatePreview();
+    }catch(e){
+      addMsg("danger", "Google OCRでの読み取りに失敗しました：" + e.message + "。手動で入力してください。");
+    }finally{
+      btn.disabled = false;
     }
   });
 
