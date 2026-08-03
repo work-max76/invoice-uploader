@@ -179,11 +179,6 @@
     </div>
     <p class="file-hint">Google OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します（読み取りのため一時的にGoogleドライブへ送信し、読み取り後すぐに削除します）。自動入力された値は必ず目視で確認・修正してください。</p>
 
-    <details class="site-editor" id="ocrRawWrap" style="display:none;">
-      <summary>OCRで読み取った文字を確認する（自動入力できなかった項目はここから手動でコピーできます）</summary>
-      <textarea id="ocrRawText" readonly style="min-height:160px;"></textarea>
-    </details>
-
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
       <textarea id="vendorListArea" placeholder="1行に1取引先名を入力（例：〇〇商事株式会社）"></textarea>
@@ -844,10 +839,6 @@
         return;
       }
 
-      // 読み取った生のテキストを表示（自動入力できない項目があった場合、ここから手動でコピーできる）
-      el("ocrRawText").value = text;
-      el("ocrRawWrap").style.display = "";
-
       const dateC = extractDateCandidate(text);
       const amountC = extractAmountCandidate(text);
       const vendorC = extractVendorCandidate(text);
@@ -866,17 +857,16 @@
       } else { missing.push("金額"); }
       if(vendorC){
         vendorEl.value = vendorC;
+        rememberVendor(vendorC); // 読み取れた正式名称は、重複がなければ取引先名リストにも自動追加する
         filledAny = true;
       } else { missing.push("取引先名"); }
 
       if(filledAny && missing.length === 0){
         addMsg("warn", "Google OCRで読み取った文字から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
       } else if(filledAny){
-        addMsg("warn", "自動推定できたのは一部の項目のみです（未入力：" + missing.join("・") + "）。下の「OCRで読み取った文字を確認する」から該当箇所を確認し、手動で入力してください。");
-        el("ocrRawWrap").open = true;
+        addMsg("warn", "自動推定できたのは一部の項目のみです（未入力：" + missing.join("・") + "）。手動で入力してください。");
       } else {
-        addMsg("warn", "OCRでは読み取れましたが、発行月・金額・取引先名を自動推定できませんでした。下の「OCRで読み取った文字を確認する」から手動で入力してください。");
-        el("ocrRawWrap").open = true;
+        addMsg("warn", "OCRでは読み取れましたが、発行月・金額・取引先名を自動推定できませんでした。手動で入力してください。");
       }
       await updateTargetFolder();
       updatePreview();
