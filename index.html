@@ -782,7 +782,8 @@
     if(regIdx !== -1){
       candidates.sort((a,b)=> Math.abs(a.index - regIdx) - Math.abs(b.index - regIdx));
     }
-    return candidates[0].name.replace(/(株式会社|有限会社|合同会社|㈱|㈲)/, "").trim();
+    // 正式名称（法人格を含む）で返す。㈱・㈲は正式表記の「株式会社」「有限会社」に変換する
+    return candidates[0].name.replace(/㈱/g, "株式会社").replace(/㈲/g, "有限会社").trim();
   }
 
   // ---- Google OCR (experimental) ----
