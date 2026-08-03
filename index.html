@@ -152,7 +152,7 @@
       <div class="field">
         <label for="submitterName">担当者名（申請者）</label>
         <input type="text" id="submitterName" placeholder="例：山田太郎" autocomplete="off">
-        <div class="file-hint">共有アドレスでログインしている場合も、実際にアップロードした方の氏名を入力してください。</div>
+        <div class="file-hint">共有アドレスでログインしている場合も、実際にアップロードした方の氏名を入力してください。（前回入力した氏名がこの端末に記憶され、次回以降も自動で表示されます。別の方が使う場合は上書きしてください）</div>
       </div>
     </div>
     <div class="row">
@@ -241,6 +241,8 @@
   ];
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
+  const LAST_SITE_KEY = "invoice_tool_last_site_v1";
+  const LAST_SUBMITTER_KEY = "invoice_tool_last_submitter_v1";
   const DB_NAME = "invoiceUploaderDB";
   const STORE_NAME = "handles";
   const GAS_URL = "https://script.google.com/macros/s/AKfycbynbqtmz4A8fCh-rQpwQVLoV2No8U4I1Te9jTJwmtZLB6DFaMdRmZnWtdOz3wTIUVuebw/exec";
@@ -430,6 +432,13 @@
       opt.value = s; opt.textContent = s;
       siteSelectEl.appendChild(opt);
     });
+    // 前回アップロード時に選択した拠点名があれば、それを初期選択にする
+    try{
+      const lastSite = localStorage.getItem(LAST_SITE_KEY);
+      if(lastSite && DEFAULT_SITES.includes(lastSite)){
+        siteSelectEl.value = lastSite;
+      }
+    }catch(e){ /* ignore */ }
   }
 
   // ---- Vendor list (predictive suggestions, free text still allowed) ----
@@ -697,6 +706,10 @@
       showToast("アップロードしました：" + parts.join(" ＞ ") + " ＞ " + data.filename);
       addHistory({ time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor, amount: data.amount, filename: data.filename, method: "upload", folder: parts.join("/"), submitter: data.submitter });
       rememberVendor(data.vendor);
+      try{
+        localStorage.setItem(LAST_SITE_KEY, siteSelectEl.value);
+        localStorage.setItem(LAST_SUBMITTER_KEY, data.submitter || "");
+      }catch(e){ /* ignore */ }
       el("clearFormBtn").click();
     }catch(e){
       showToast("アップロードに失敗しました：" + e.message);
@@ -879,6 +892,11 @@
   renderVendorList();
   renderList();
   issueDateEl.value = new Date().toISOString().slice(0,7);
+  // 前回アップロード時の担当者名があれば、初期表示しておく（違う人が使う場合は上書き入力してください）
+  try{
+    const lastSubmitter = localStorage.getItem(LAST_SUBMITTER_KEY);
+    if(lastSubmitter) submitterNameEl.value = lastSubmitter;
+  }catch(e){ /* ignore */ }
   restoreFolder().then(updatePreview);
   updatePreview();
 })();
