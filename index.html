@@ -119,7 +119,7 @@
   </div>
 
   <div class="card">
-    <h2>1. 共有フォルダの設定</h2>
+    <h2>1. 共有フォルダの設定（初回のみ）</h2>
     <div class="folder-status unset" id="folderStatus">
       <span class="dot"></span>
       <span id="folderStatusText">共有フォルダが未設定です。下のボタンから、会社の共有クラウドがPC上で見えているフォルダ（請求書の保存先ルートフォルダ）を選択してください。</span>
@@ -178,6 +178,11 @@
       <button class="btn secondary" id="ocrBtn">PDFから発行月・金額・取引先名を自動入力（Google OCR）</button>
     </div>
     <p class="file-hint">Google OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します（読み取りのため一時的にGoogleドライブへ送信し、読み取り後すぐに削除します）。自動入力された値は必ず目視で確認・修正してください。</p>
+
+    <details class="site-editor" id="ocrRawWrap" style="display:none;">
+      <summary>OCRで読み取った文字を確認する（自動入力できなかった項目はここから手動でコピーできます）</summary>
+      <textarea id="ocrRawText" readonly style="min-height:160px;"></textarea>
+    </details>
 
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
@@ -717,10 +722,13 @@
       while(idx !== -1){ keywordIdx.push({ idx, len: k.length }); idx = text.indexOf(k, idx + 1); }
     });
 
-    // 優先1: 「ご請求金額」等の直後(15文字以内)にある数字は、¥や円が付いていなくても最優先で採用する
-    const nearNumRe = /[¥￥]?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})\s*円?/;
+    const numToken = "([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})";
+
+    // 優先1: 「ご請求金額」等の直後(50文字以内)にある数字は、¥や円が付いていなくても最優先で採用する
+    // (OCRではラベルと金額の間の余白が多数の空白文字になることがあるため、範囲を広めに取る)
+    const nearNumRe = new RegExp("[¥￥]?\\s*" + numToken + "\\s*円?");
     for(const kw of keywordIdx){
-      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + 15);
+      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + 50);
       const nm = after.match(nearNumRe);
       if(nm){
         const num = parseInt(nm[1].replace(/,/g, ""), 10);
@@ -742,7 +750,24 @@
         if(dist < bestDist){ bestDist = dist; best = num; }
       }
     }
-    return best !== null ? best : maxFallback;
+    if(best !== null) return best;
+    if(maxFallback !== null) return maxFallback;
+
+    // 優先3: 最後の手段として、キーワードと同じ行にある数字を採用する(¥・円マークが無い場合向け)
+    const lineNumRe = new RegExp(numToken);
+    const lines = text.split(/\r?\n/);
+    for(const kw of keywords){
+      for(const line of lines){
+        if(line.indexOf(kw) === -1) continue;
+        const nm = line.match(lineNumRe);
+        if(nm){
+          const num = parseInt(nm[1].replace(/,/g, ""), 10);
+          if(!isNaN(num)) return num;
+        }
+      }
+    }
+
+    return null;
   }
 
   function extractVendorCandidate(text){
@@ -804,30 +829,40 @@
         addMsg("warn", "OCRでも文字を読み取れませんでした。手動で入力してください。");
         return;
       }
+
+      // 読み取った生のテキストを表示（自動入力できない項目があった場合、ここから手動でコピーできる）
+      el("ocrRawText").value = text;
+      el("ocrRawWrap").style.display = "";
+
       const dateC = extractDateCandidate(text);
       const amountC = extractAmountCandidate(text);
       const vendorC = extractVendorCandidate(text);
       let filledAny = false;
+      const missing = [];
 
       if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
         const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
         issueDateEl.value = `${y}-${mo}`;
         filledAny = true;
-      }
+      } else { missing.push("発行月"); }
       if(amountC){
         amountEl.value = String(amountC);
         amountHintEl.textContent = Number(amountC).toLocaleString("ja-JP") + " 円（税込・OCRによる自動推定）";
         filledAny = true;
-      }
+      } else { missing.push("金額"); }
       if(vendorC){
         vendorEl.value = vendorC;
         filledAny = true;
-      }
+      } else { missing.push("取引先名"); }
 
-      if(filledAny){
+      if(filledAny && missing.length === 0){
         addMsg("warn", "Google OCRで読み取った文字から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
+      } else if(filledAny){
+        addMsg("warn", "自動推定できたのは一部の項目のみです（未入力：" + missing.join("・") + "）。下の「OCRで読み取った文字を確認する」から該当箇所を確認し、手動で入力してください。");
+        el("ocrRawWrap").open = true;
       } else {
-        addMsg("warn", "OCRでは読み取れましたが、発行月・金額・取引先名を自動推定できませんでした。手動で入力してください。");
+        addMsg("warn", "OCRでは読み取れましたが、発行月・金額・取引先名を自動推定できませんでした。下の「OCRで読み取った文字を確認する」から手動で入力してください。");
+        el("ocrRawWrap").open = true;
       }
       await updateTargetFolder();
       updatePreview();
