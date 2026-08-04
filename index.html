@@ -221,6 +221,47 @@
     <p class="file-hint">拠点名の記載がない請求書の一覧です。拠点ごとの金額を入力して確定すると、自動で仕訳対象（アップロード履歴）に反映されます。この画面は経理担当者のみに表示されます。</p>
     <div id="pendingList"></div>
   </div>
+  <div class="card">
+    <h2>6. ガソリンカード請求書の自動仕訳（車両ごとに部門振り分け）</h2>
+    <p class="file-hint">宇田川株式会社（ENEOS特約店）発行の合算請求書をOCRで読み取り、明細内の「車番合計」ごとに車両対応表と照合して、部門（拠点名または担当者名）別に自動で処理履歴へ登録します。件数が多いため、登録前に必ず内容を確認してください。</p>
+    <div class="row">
+      <div class="field">
+        <label for="gcIssueDate">請求書発行月（締め月）</label>
+        <input type="month" id="gcIssueDate">
+      </div>
+      <div class="field">
+        <label for="gcVendor">取引先名（正式名称）</label>
+        <input type="text" id="gcVendor" list="vendorDatalist" value="宇田川株式会社">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:2; min-width:280px;">
+        <label for="gcFile">ガソリンカード請求書PDF</label>
+        <input type="file" id="gcFile" accept="application/pdf,.pdf">
+        <div class="file-hint" id="gcFileHint">宇田川株式会社発行の合算請求書PDFを選択してください。</div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:0;">
+      <button class="btn secondary" id="gcOcrBtn">OCRで読み取り、車両ごとに部門振り分け</button>
+    </div>
+    <div class="msg-list" id="gcMsgList"></div>
+    <div id="gcResultWrap" style="display:none; margin-top:14px;">
+      <table>
+        <thead>
+          <tr><th>宇田川カード番号</th><th>ナンバー</th><th>車種</th><th>部門（拠点名／担当者名）</th><th>金額</th><th>状態</th></tr>
+        </thead>
+        <tbody id="gcResultBody"></tbody>
+      </table>
+      <div class="msg-list" id="gcChecksumMsg" style="margin-top:8px;"></div>
+      <div class="actions">
+        <button class="btn big" id="gcRegisterBtn">この内容で処理履歴へ登録</button>
+      </div>
+    </div>
+    <details style="margin-top:12px;">
+      <summary>読み取った文字を確認する（うまく抽出できない場合の確認用）</summary>
+      <pre id="gcRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#F7F9FC; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
+    </details>
+  </div>
   <footer>
     社内利用ツール／すべての処理はこの端末とブラウザ内で完結し、選択したファイルが外部サーバーへ送信されることはありません。
   </footer>
@@ -699,8 +740,8 @@
     if(m) return { y: parseInt(m[1],10), mo: parseInt(m[2],10), d: parseInt(m[3],10) };
     return null;
   }
-  function extractAmountCandidate(text){
-    const keywords = ["ご請求金額","御請求金額","請求金額","合計金額","税込合計","お支払金額","合計"];
+  function extractAmountCandidate(text, customKeywords){
+    const keywords = customKeywords || ["ご請求金額","御請求金額","請求金額","合計金額","税込合計","お支払金額","合計"];
     const keywordIdx = [];
     keywords.forEach(k=>{
       let idx = text.indexOf(k);
@@ -945,6 +986,226 @@
         e.target.disabled = false;
       }
     }
+  });
+  // ==== 【新規】ガソリンカード請求書の自動仕訳（車両→部門振り分け） ====
+  // 宇田川カード対応表（宇田川カード番号・ナンバー・車種・部門・管理者）。
+  // 台数の増減・部門の変更はここを書き換えてコミットすれば全員のページに反映されます。
+  // dept＝仕訳で使う部門（拠点名）、driver＝参考表示用の管理者名。
+  const VEHICLE_MAP = [
+    { card: 1, plate: 1107, type: "ベンツ", dept: "事務センター", driver: "伊藤社長" },
+    { card: 2, plate: 5552, type: "ティアナ", dept: "泉第3", driver: "哲郎さん" },
+    { card: 4, plate: 8332, type: "グレイス", dept: "営業", driver: "金子" },
+    { card: 5, plate: 19, type: "デミオ", dept: "営業", driver: "差波" },
+    { card: 8, plate: 3552, type: "4ｔ", dept: "本社", driver: "本社" },
+    { card: 9, plate: 1787, type: "2ｔ", dept: "大青田", driver: "大青田" },
+    { card: 10, plate: 1580, type: "2ｔ", dept: "大青田", driver: "大青田" },
+    { card: 12, plate: 9757, type: "プリウス", dept: "本社", driver: "稲石" },
+    { card: 15, plate: 2998, type: "カローラ", dept: "十余二南", driver: "麻田" },
+    { card: 16, plate: 20, type: "マーチ", dept: "三ツ堀", driver: "小林" },
+    { card: 17, plate: 1468, type: "マーチ", dept: "流山駒木", driver: "黒田" },
+    { card: 18, plate: 3569, type: "ADバン", dept: "事務センター", driver: "廃車" },
+    { card: 19, plate: 1581, type: "2ｔデュトロ", dept: "大青田", driver: "大青田" },
+    { card: 20, plate: 6935, type: "カローラアオクシオ", dept: "ロジック柏", driver: "LOGIQ佐々木" },
+    { card: 21, plate: 5020, type: "フィット", dept: "野田船形", driver: "野田船形" },
+    { card: 22, plate: 8400, type: "エブリイ", dept: "大青田", driver: "佐々木徹" },
+    { card: 23, plate: 1134, type: "カローラフィールダー", dept: "営業", driver: "古島" },
+    { card: 25, plate: 1480, type: "フィット", dept: "事務センター", driver: "総務人材" },
+    { card: 26, plate: 2666, type: "ノート", dept: "インター", driver: "中山" },
+    { card: 28, plate: 9474, type: "ステップワゴン", dept: "事務センター", driver: "事務センター" },
+    { card: 29, plate: 6435, type: "エブリイ（バックカメラ有）", dept: "大青田", driver: "大青田" },
+    { card: 30, plate: 9565, type: "フィット", dept: "事務センター", driver: "事務センター" },
+    { card: 31, plate: 9583, type: "ノート", dept: "泉第2", driver: "泉第2" },
+    { card: 32, plate: 3480, type: "いすず", dept: "運送", driver: "丸山(運送)" },
+    { card: 33, plate: 3481, type: "三菱キャンター", dept: "運送", driver: "大和田(運送)" },
+    { card: 34, plate: 3482, type: "三菱ファイター", dept: "運送", driver: "杉本(運送)" },
+    { card: 35, plate: 6634, type: "フィット", dept: "営業", driver: "足立" },
+  ];
+  function findVehicleMatches(cardNo){
+    return VEHICLE_MAP.filter(v => v.card === cardNo);
+  }
+  // OCRテキストから「(車番合計 NNN)」とその直後の金額の組を全て抽出する
+  function extractGasCardGroups(text){
+    const groups = [];
+    const markerRe = /車番合計\s*[\(（]?\s*(\d{1,3})\s*[\)）]?/g;
+    const numToken = "([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})";
+    let m;
+    while((m = markerRe.exec(text))){
+      const cardNo = parseInt(m[1], 10);
+      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 40);
+      let amount = null;
+      const nm = after.match(new RegExp(numToken));
+      if(nm){
+        amount = parseInt(nm[1].replace(/,/g, ""), 10);
+      } else {
+        const lineStart = text.lastIndexOf("\n", m.index);
+        const lineEnd = text.indexOf("\n", m.index);
+        const line = text.slice(lineStart === -1 ? 0 : lineStart, lineEnd === -1 ? text.length : lineEnd);
+        const nm2 = line.match(new RegExp(numToken));
+        if(nm2) amount = parseInt(nm2[1].replace(/,/g, ""), 10);
+      }
+      groups.push({ cardNo, amount });
+    }
+    return groups;
+  }
+  const gcIssueDateEl = el("gcIssueDate"), gcVendorEl = el("gcVendor"), gcFileEl = el("gcFile"),
+        gcFileHint = el("gcFileHint"), gcMsgList = el("gcMsgList"), gcResultWrap = el("gcResultWrap"),
+        gcResultBody = el("gcResultBody"), gcChecksumMsg = el("gcChecksumMsg"), gcRawText = el("gcRawText");
+  gcFileEl.addEventListener("change", ()=>{
+    const f = gcFileEl.files[0];
+    gcFileHint.textContent = f ? `選択中：${f.name}（${Math.round(f.size/1024)} KB）` : "宇田川株式会社発行の合算請求書PDFを選択してください。";
+  });
+  function gcAddMsg(list, type, text){
+    const d = document.createElement("div");
+    d.className = "msg " + type;
+    d.textContent = text;
+    list.appendChild(d);
+  }
+  el("gcOcrBtn").addEventListener("click", async ()=>{
+    const file = gcFileEl.files[0];
+    if(!file){ showToast("先にガソリンカード請求書PDFを選択してください"); return; }
+    const btn = el("gcOcrBtn");
+    btn.disabled = true;
+    gcMsgList.innerHTML = "";
+    gcResultWrap.style.display = "none";
+    showToast("Google OCRで読み取っています…（時間がかかる場合があります）");
+    try{
+      const text = await ocrViaGas(file);
+      gcRawText.textContent = text || "";
+      if(!text || text.replace(/\s/g, "").length < 10){
+        gcAddMsg(gcMsgList, "warn", "OCRで文字を読み取れませんでした。スキャン画質を確認するか、手動で処理してください。");
+        return;
+      }
+      const dateC = extractDateCandidate(text);
+      if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
+        const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
+        gcIssueDateEl.value = `${y}-${mo}`;
+      }
+      const vendorC = extractVendorCandidate(text);
+      if(vendorC) gcVendorEl.value = vendorC;
+      const totalC = extractAmountCandidate(text, ["当月のご利用金額","当月のご請求額"]);
+      const groups = extractGasCardGroups(text);
+      if(groups.length === 0){
+        gcAddMsg(gcMsgList, "warn", "「車番合計」の記載を読み取れませんでした。下の「読み取った文字を確認する」からOCR結果を確認し、手動で処理してください。");
+        return;
+      }
+      renderGcResults(groups, totalC);
+      gcAddMsg(gcMsgList, "warn", "OCRによる自動抽出結果です。部門・金額に誤りがないか必ず確認してから登録してください（特に「重複あり」「未登録」「金額未検出」の行）。");
+    }catch(e){
+      gcAddMsg(gcMsgList, "danger", "Google OCRでの読み取りに失敗しました：" + e.message);
+    }finally{
+      btn.disabled = false;
+    }
+  });
+  function renderGcResults(groups, totalC){
+    gcResultBody.innerHTML = "";
+    groups.forEach((g, idx)=>{
+      const matches = findVehicleMatches(g.cardNo);
+      let plate = "-", type = "-", dept = "", driver = "";
+      let status = "";
+      if(matches.length === 0){
+        status = `<span style="color:var(--danger); font-weight:700;">未登録（要手入力）</span>`;
+      } else if(matches.length > 1){
+        plate = matches.map(v=>v.plate).join(" / ");
+        type = matches.map(v=>v.type).join(" / ");
+        dept = matches[0].dept;
+        driver = matches.map(v=>v.driver).join(" / ");
+        status = `<span style="color:var(--warn); font-weight:700;">カード番号重複あり（要確認）</span>`;
+      } else {
+        plate = matches[0].plate; type = matches[0].type; dept = matches[0].dept; driver = matches[0].driver || "";
+        status = g.amount === null ? `<span style="color:var(--warn); font-weight:700;">金額未検出</span>` : "OK";
+      }
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${String(g.cardNo).padStart(3,"0")}</td>
+        <td>${plate}</td>
+        <td>${type}</td>
+        <td>
+          <input type="text" class="gc-dept" data-idx="${idx}" value="${dept}" style="width:100%; border:1px solid var(--border); border-radius:4px; padding:4px 6px;">
+          ${driver ? `<div class="file-hint" style="margin-top:2px;">管理者：${driver}</div>` : ""}
+        </td>
+        <td><input type="text" class="gc-amount" data-idx="${idx}" inputmode="numeric" value="${g.amount !== null ? g.amount : ""}" style="width:100%; border:1px solid var(--border); border-radius:4px; padding:4px 6px;"></td>
+        <td>${status}</td>
+      `;
+      gcResultBody.appendChild(tr);
+    });
+    gcResultBody.querySelectorAll(".gc-amount").forEach(inp=>{
+      inp.addEventListener("input", ()=>{
+        inp.value = inp.value.replace(/[^0-9]/g, "");
+        updateGcChecksum(totalC);
+      });
+    });
+    gcResultWrap.style.display = "block";
+    updateGcChecksum(totalC);
+  }
+  function currentGcRows(){
+    const rows = [];
+    gcResultBody.querySelectorAll("tr").forEach(tr=>{
+      const dept = tr.querySelector(".gc-dept").value.trim();
+      const amount = Number(tr.querySelector(".gc-amount").value || "0");
+      if(dept && amount > 0) rows.push({ dept, amount });
+    });
+    return rows;
+  }
+  function updateGcChecksum(totalC){
+    gcChecksumMsg.innerHTML = "";
+    const rows = currentGcRows();
+    const sum = rows.reduce((a,r)=> a + r.amount, 0);
+    if(totalC){
+      if(sum === totalC){
+        gcAddMsg(gcChecksumMsg, "ok", `検算OK：部門別合計 ${sum.toLocaleString("ja-JP")}円 ＝ 請求書合計 ${totalC.toLocaleString("ja-JP")}円`);
+      } else {
+        gcAddMsg(gcChecksumMsg, "danger", `検算NG：部門別合計 ${sum.toLocaleString("ja-JP")}円 ≠ 請求書合計 ${totalC.toLocaleString("ja-JP")}円（差額 ${(sum-totalC).toLocaleString("ja-JP")}円）。金額を確認してください。`);
+      }
+    } else {
+      gcAddMsg(gcChecksumMsg, "warn", `請求書合計金額を自動抽出できなかったため、検算できません。部門別合計は ${sum.toLocaleString("ja-JP")}円 です。手動で請求書と照合してください。`);
+    }
+  }
+  el("gcRegisterBtn").addEventListener("click", async ()=>{
+    const rows = currentGcRows();
+    if(rows.length === 0){ showToast("部門と金額が入力された行がありません"); return; }
+    const dateStr = toYYMM(gcIssueDateEl.value);
+    const vendor = sanitize(gcVendorEl.value);
+    if(!dateStr || !vendor){ showToast("発行月・取引先名を確認してください"); return; }
+    const file = gcFileEl.files[0];
+    if(!file){ showToast("PDFファイルを選択してください"); return; }
+    if(!folderHandle){ showToast("先に共有フォルダを選択してください（画面上部）"); return; }
+    const totalAmount = rows.reduce((a,r)=> a + r.amount, 0);
+    const baseFilename = stripForbidden(`${dateStr}_ガソリンカード_${vendor}_${totalAmount}.pdf`);
+    const [y, m] = gcIssueDateEl.value.split("-");
+    const monthNum = String(parseInt(m, 10));
+    const parts = [`${y}年${monthNum}月`, "ガソリンカード"];
+    const ok = await verifyPermission(folderHandle, "readwrite");
+    if(!ok){ showToast("フォルダへの書き込み許可が必要です"); return; }
+    let subDir;
+    try{
+      subDir = await getSubfolder(folderHandle, parts, true);
+    }catch(e){
+      showToast("保存先フォルダの作成に失敗しました：" + e.message);
+      return;
+    }
+    try{
+      const fileHandle = await subDir.getFileHandle(baseFilename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(await file.arrayBuffer());
+      await writable.close();
+    }catch(e){
+      showToast("PDFの保存に失敗しました：" + e.message);
+      return;
+    }
+    const now = new Date().toISOString();
+    rows.forEach(r=>{
+      addHistory(
+        { time: now, dateStr, site: r.dept, vendor, amount: r.amount, filename: baseFilename + "(" + r.dept + "分)", folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: sanitize(submitterNameEl.value) },
+        "record"
+      );
+    });
+    rememberVendor(vendor);
+    showToast(rows.length + "件の部門に振り分けて登録しました");
+    gcResultWrap.style.display = "none";
+    gcResultBody.innerHTML = "";
+    gcMsgList.innerHTML = "";
+    gcFileEl.value = "";
+    gcFileHint.textContent = "宇田川株式会社発行の合算請求書PDFを選択してください。";
   });
   // ---- init ----
   renderSiteSelect();
