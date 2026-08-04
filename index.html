@@ -113,11 +113,9 @@
     <h1>請求書アップロードツール</h1>
     <p>【請求書発行月(YYMM)】_【拠点名】_【取引先名】_【金額(税込)】.pdf の名前で、選択したPDFを共有フォルダへそのまま保存（アップロード）できます。対応ブラウザは Google Chrome / Microsoft Edge です。</p>
   </header>
-
   <div id="unsupportedBanner" class="unsupported-banner" style="display:none;">
     お使いのブラウザは共有フォルダへの自動保存に対応していません。Google Chrome または Microsoft Edge で開いてください。
   </div>
-
   <div class="card">
     <h2>1. 共有フォルダの設定</h2>
     <div class="folder-status unset" id="folderStatus">
@@ -134,7 +132,6 @@
       <span id="targetFolderText"></span>
     </div>
   </div>
-
   <div class="card">
     <h2>2. 情報を入力してPDFを選択</h2>
     <div class="row">
@@ -146,6 +143,12 @@
         <label for="siteSelect">拠点名</label>
         <select id="siteSelect"></select>
         <div class="file-hint">拠点名リストは全員共通で自動配信されます（このページの管理者がGitHub上のファイルを更新すると反映されます）。</div>
+        <div class="file-hint" style="margin-top:8px;">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--text); cursor:pointer;">
+            <input type="checkbox" id="noSiteCheck" style="width:auto;">
+            複数拠点をまたぐ（合算請求書）。経理へ振分けを依頼する。
+          </label>
+        </div>
       </div>
     </div>
     <div class="row">
@@ -178,7 +181,6 @@
       <button class="btn secondary" id="ocrBtn">PDFから発行月・金額・取引先名を自動入力（OCR）</button>
     </div>
     <p class="file-hint">OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します。自動入力された値は必ず目視で確認・修正してください。</p>
-
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
       <textarea id="vendorListArea" placeholder="1行に1取引先名を入力（例：〇〇商事株式会社）"></textarea>
@@ -189,7 +191,6 @@
       </div>
     </details>
   </div>
-
   <div class="card">
     <h2>3. ファイル名の確認とアップロード</h2>
     <div class="preview-box" id="previewBox">
@@ -201,7 +202,6 @@
       <button class="btn secondary" id="clearFormBtn">入力をクリア</button>
     </div>
   </div>
-
   <div class="card">
     <h2>4. 処理履歴</h2>
     <table>
@@ -216,18 +216,16 @@
       <button class="btn secondary" id="downloadCsvBtn">履歴をCSVでダウンロード</button>
     </div>
   </div>
-
+  <div class="card" id="pendingCard" style="display:none;">
+    <h2>5. 経理：拠点振り分け待ちの請求書</h2>
+    <p class="file-hint">拠点名の記載がない請求書の一覧です。拠点ごとの金額を入力して確定すると、自動で仕訳対象（アップロード履歴）に反映されます。この画面は経理担当者のみに表示されます。</p>
+    <div id="pendingList"></div>
+  </div>
   <footer>
     社内利用ツール／すべての処理はこの端末とブラウザ内で完結し、選択したファイルが外部サーバーへ送信されることはありません。
   </footer>
 </div>
-
 <div class="toast" id="toast"></div>
-
-
-
-
-
 <script>
 (function(){
   const DEFAULT_SITES = [
@@ -242,7 +240,6 @@
   const STORE_NAME = "handles";
   const GAS_URL = "https://script.google.com/macros/s/AKfycbynbqtmz4A8fCh-rQpwQVLoV2No8U4I1Te9jTJwmtZLB6DFaMdRmZnWtdOz3wTIUVuebw/exec";
   const GAS_KEY = "shinkashiwa-invoice";
-
   // Cloudflare Access でログイン中のメールアドレスを取得（未対応環境では空のまま）
   let currentUserEmail = "";
   async function loadAccessIdentity(){
@@ -254,8 +251,7 @@
       }
     }catch(e){ /* Cloudflare Access配下以外（ローカル確認時等）では取得できないため無視 */ }
   }
-  loadAccessIdentity();
-
+  loadAccessIdentity().then(()=> loadPendingQueue());
   const el = (id) => document.getElementById(id);
   const issueDateEl = el("issueDate"), siteSelectEl = el("siteSelect"), vendorEl = el("vendor"),
         submitterNameEl = el("submitterName"),
@@ -265,19 +261,18 @@
         pdfFileEl = el("pdfFile"), fileHint = el("fileHint"),
         folderStatus = el("folderStatus"), folderStatusText = el("folderStatusText"),
         targetFolderStatus = el("targetFolderStatus"), targetFolderText = el("targetFolderText"),
-        uploadBtn = el("uploadBtn");
-
+        uploadBtn = el("uploadBtn"),
+        noSiteCheckEl = el("noSiteCheck"), pendingCard = el("pendingCard"), pendingList = el("pendingList");
+  const NO_SITE_LABEL = "拠点未定";
   const supportsFS = ("showDirectoryPicker" in window);
   if(!supportsFS){
     el("unsupportedBanner").style.display = "block";
     el("chooseFolderBtn").disabled = true;
     el("rescanBtn").disabled = true;
   }
-
   let folderHandle = null;
   let existingNames = new Set();
   let targetDirHandle = null;
-
   // ---- IndexedDB helpers (to persist the folder handle across sessions) ----
   function openDB(){
     return new Promise((resolve, reject)=>{
@@ -305,7 +300,6 @@
       req.onerror = ()=> reject(req.error);
     });
   }
-
   async function verifyPermission(handle, mode){
     const opts = { mode };
     if((await handle.queryPermission(opts)) === "granted") return true;
@@ -314,22 +308,24 @@
     }catch(e){}
     return false;
   }
-
   function setFolderStatus(text, ok){
     folderStatusText.textContent = text;
     folderStatus.classList.toggle("unset", !ok);
   }
-
+  // 拠点名なしチェック時は特別な拠点名（NO_SITE_LABEL）を使う。
+  // その場合、履歴には直接「新規記録」として残さず、経理の振り分けキューへ送る扱いになる。
+  function currentSite(){
+    return noSiteCheckEl.checked ? NO_SITE_LABEL : siteSelectEl.value;
+  }
   // 発行月・拠点名から「年月/拠点名」のサブフォルダパスを決定する（例：2026年7月／本社）
   function folderPathParts(){
     const dateVal = issueDateEl.value;
-    const site = stripForbidden(sanitize(siteSelectEl.value));
+    const site = stripForbidden(sanitize(currentSite()));
     if(!dateVal || !site) return null;
     const [y, m] = dateVal.split("-");
     const monthNum = String(parseInt(m, 10));
     return [`${y}年${monthNum}月`, site];
   }
-
   async function getSubfolder(root, parts, create){
     let dir = root;
     for(const part of parts){
@@ -337,13 +333,11 @@
     }
     return dir;
   }
-
   function setTargetFolderStatus(text, ok){
     targetFolderStatus.style.display = text ? "flex" : "none";
     targetFolderText.textContent = text || "";
     targetFolderStatus.classList.toggle("unset", !ok);
   }
-
   // 発行月・拠点名が確定したら、保存先サブフォルダを（作成はせず）確認し、重複チェック用の一覧を更新する
   async function updateTargetFolder(){
     existingNames = new Set();
@@ -366,7 +360,6 @@
       setTargetFolderStatus("保存先：" + pathLabel + "（新規作成されます）", true);
     }
   }
-
   el("chooseFolderBtn").addEventListener("click", async ()=>{
     if(!supportsFS) return;
     try{
@@ -381,7 +374,6 @@
       if(e.name !== "AbortError") showToast("フォルダ選択に失敗しました");
     }
   });
-
   el("rescanBtn").addEventListener("click", async ()=>{
     if(!folderHandle){ showToast("先にフォルダを選択してください"); return; }
     // ボタンのクリック操作の中で呼ぶことで、ブラウザのアクセス許可確認が正しく機能する
@@ -396,7 +388,6 @@
     showToast(ok ? ("保存先フォルダを再読込しました（" + existingNames.size + "件のファイル）") : "アクセスが許可されませんでした");
     updatePreview();
   });
-
   async function restoreFolder(){
     if(!supportsFS) return;
     try{
@@ -416,7 +407,6 @@
       }
     }catch(e){ /* no handle stored yet */ }
   }
-
   // ---- Site list ----
   // 拠点名リストは常にこのファイル内のDEFAULT_SITESを正とする（ローカル保存でのカスタマイズは行わない）。
   // 変更したい場合はGitHub上でDEFAULT_SITESを書き換えてコミットすれば、全員のページに自動反映される。
@@ -435,7 +425,6 @@
       }
     }catch(e){ /* ignore */ }
   }
-
   // ---- Vendor list (predictive suggestions, free text still allowed) ----
   const VENDOR_KEY = "invoice_tool_vendors_v1";
   const vendorListArea = el("vendorListArea"), vendorDatalist = el("vendorDatalist");
@@ -480,7 +469,6 @@
       renderVendorList();
     }
   }
-
   // ---- Filename logic ----
   // input type="month" の値（"YYYY-MM"）を YYMM 形式に変換する
   function toYYMM(dateStr){
@@ -492,7 +480,6 @@
   function sanitize(str){ return (str || "").trim(); }
   function hasForbidden(str){ FORBIDDEN.lastIndex = 0; return FORBIDDEN.test(str || ""); }
   function stripForbidden(str){ return (str || "").replace(FORBIDDEN, ""); }
-
   amountEl.addEventListener("input", ()=>{
     let digits = amountEl.value.replace(/[^0-9]/g, "");
     amountEl.value = digits;
@@ -503,15 +490,18 @@
   [issueDateEl, siteSelectEl].forEach(e=> e.addEventListener("change", ()=>{
     updateTargetFolder().then(updatePreview);
   }));
+  noSiteCheckEl.addEventListener("change", ()=>{
+    siteSelectEl.disabled = noSiteCheckEl.checked;
+    updateTargetFolder().then(updatePreview);
+  });
   pdfFileEl.addEventListener("change", ()=>{
     const f = pdfFileEl.files[0];
     fileHint.textContent = f ? `選択中：${f.name}（${Math.round(f.size/1024)} KB）` : "スキャンまたはダウンロードした請求書PDFを選択してください。";
     updatePreview();
   });
-
   function currentFilename(){
     const dateStr = toYYMM(issueDateEl.value);
-    const site = stripForbidden(sanitize(siteSelectEl.value));
+    const site = stripForbidden(sanitize(currentSite()));
     const vendor = stripForbidden(sanitize(vendorEl.value));
     const amount = amountEl.value.trim();
     const submitter = sanitize(submitterNameEl.value);
@@ -519,27 +509,21 @@
     const filename = filled ? `${dateStr}_${site}_${vendor}_${amount}.pdf` : null;
     return {dateStr, site, vendor, amount, submitter, filled, filename};
   }
-
   function updatePreview(){
     const data = currentFilename();
     msgList.innerHTML = "";
     const hasFile = pdfFileEl.files && pdfFileEl.files.length > 0;
-
     // ボタンはどんな状態でも常にクリックできるようにし（disabled属性は使わない）、
     // 不足があればクリック時にその場で理由を案内する。ここでは見た目のヒントのみ変える。
     uploadBtn.classList.toggle("btn-dim", !(data.filled && hasFile && supportsFS && folderHandle));
-
     if(!data.filled){
       previewText.textContent = "請求書発行月・拠点名・担当者名・取引先名・金額・PDFを確認してください";
       return;
     }
-
     previewText.textContent = data.filename;
-
-    if(hasForbidden(vendorEl.value) || hasForbidden(siteSelectEl.value)){
+    if(hasForbidden(vendorEl.value) || hasForbidden(currentSite())){
       addMsg("warn", `使用できない記号（\\ / : * ? " < > |）は自動的に除去してファイル名を作成しています。`);
     }
-
     const dupInFolder = existingNames.has(data.filename);
     const dupInHistory = getList().some(i => i.filename === data.filename);
     if(dupInFolder || dupInHistory){
@@ -547,7 +531,6 @@
     } else {
       addMsg("ok", "命名規則チェックOK。");
     }
-
     if(!hasFile){
       addMsg("warn", "アップロードには請求書PDFの選択が必要です（上の「請求書PDFファイル」から選んでください）。");
     }
@@ -557,26 +540,22 @@
       addMsg("warn", "共有フォルダが未設定のため、まだアップロードできません（上部「1. 共有フォルダの設定」で選択してください）。");
     }
   }
-
   function addMsg(type, text){
     const d = document.createElement("div");
     d.className = "msg " + type;
     d.textContent = text;
     msgList.appendChild(d);
   }
-
   function showToast(text){
     toast.textContent = text;
     toast.classList.add("show");
     setTimeout(()=> toast.classList.remove("show"), 1800);
   }
-
   el("clearFormBtn").addEventListener("click", ()=>{
     vendorEl.value = ""; amountEl.value = ""; amountHintEl.textContent = "";
     pdfFileEl.value = ""; fileHint.textContent = "スキャンまたはダウンロードした請求書PDFを選択してください。";
     updatePreview();
   });
-
   // ---- History (log) ----
   function getList(){
     try{ return JSON.parse(localStorage.getItem(LIST_KEY) || "[]"); }catch(e){ return []; }
@@ -604,12 +583,12 @@
       body: JSON.stringify(payload)
     }).catch(()=>{ /* 記録用スプレッドシートへの送信に失敗しても、ツール自体の動作は止めない */ });
   }
-  function addHistory(entry){
+  function addHistory(entry, gasAction){
     const list = getList();
     list.unshift(entry);
     saveList(list);
     renderList();
-    postToGas(entry, "record");
+    postToGas(entry, gasAction || "record");
   }
   function renderList(){
     const list = getList();
@@ -663,7 +642,6 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   });
-
   // ---- Upload / Download actions ----
   uploadBtn.addEventListener("click", async ()=>{
     const data = currentFilename();
@@ -671,13 +649,10 @@
     const file = pdfFileEl.files[0];
     if(!file){ showToast("PDFファイルを選択してください"); return; }
     if(!folderHandle){ showToast("先に共有フォルダを選択してください"); return; }
-
     const parts = folderPathParts();
     if(!parts){ showToast("請求書発行月と拠点名を入力してください"); return; }
-
     const ok = await verifyPermission(folderHandle, "readwrite");
     if(!ok){ showToast("フォルダへの書き込み許可が必要です"); return; }
-
     let subDir;
     try{
       subDir = await getSubfolder(folderHandle, parts, true); // 年度/月/拠点名フォルダを必要に応じて作成
@@ -685,12 +660,10 @@
       showToast("保存先フォルダの作成に失敗しました：" + e.message);
       return;
     }
-
     if(existingNames.has(data.filename)){
       const proceed = confirm(`「${data.filename}」は保存先フォルダ（${parts.join(" ＞ ")}）に既に存在します。上書きしますか？\n(通常は金額末尾に枝番を付けて再入力してください)`);
       if(!proceed) return;
     }
-
     try{
       const fileHandle = await subDir.getFileHandle(data.filename, { create: true });
       const writable = await fileHandle.createWritable();
@@ -698,8 +671,14 @@
       await writable.close();
       existingNames.add(data.filename);
       targetDirHandle = subDir;
-      showToast("アップロードしました：" + parts.join(" ＞ ") + " ＞ " + data.filename);
-      addHistory({ time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor, amount: data.amount, filename: data.filename, method: "upload", folder: parts.join("/"), submitter: data.submitter });
+      const isNoSite = noSiteCheckEl.checked;
+      showToast(isNoSite
+        ? "アップロードしました（経理へ拠点振り分けを依頼しました）：" + data.filename
+        : "アップロードしました：" + parts.join(" ＞ ") + " ＞ " + data.filename);
+      addHistory(
+        { time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor, amount: data.amount, filename: data.filename, method: isNoSite ? "拠点振分依頼中" : "upload", folder: parts.join("/"), submitter: data.submitter },
+        isNoSite ? "queue_allocation" : "record"
+      );
       rememberVendor(data.vendor);
       try{
         localStorage.setItem(LAST_SITE_KEY, siteSelectEl.value);
@@ -710,7 +689,6 @@
       showToast("アップロードに失敗しました：" + e.message);
     }
   });
-
   // ---- PDF読み取り結果からの候補抽出（Google OCRの結果テキストに対して使用） ----
   function extractDateCandidate(text){
     let m = text.match(/令和\s*(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
@@ -721,7 +699,6 @@
     if(m) return { y: parseInt(m[1],10), mo: parseInt(m[2],10), d: parseInt(m[3],10) };
     return null;
   }
-
   function extractAmountCandidate(text){
     const keywords = ["ご請求金額","御請求金額","請求金額","合計金額","税込合計","お支払金額","合計"];
     const keywordIdx = [];
@@ -729,9 +706,7 @@
       let idx = text.indexOf(k);
       while(idx !== -1){ keywordIdx.push({ idx, len: k.length }); idx = text.indexOf(k, idx + 1); }
     });
-
     const numToken = "([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})";
-
     // 優先1: 「ご請求金額」等の直後(50文字以内)にある数字は、¥や円が付いていなくても最優先で採用する
     // (OCRではラベルと金額の間の余白が多数の空白文字になることがあるため、範囲を広めに取る)
     const nearNumRe = new RegExp("[¥￥]?\\s*" + numToken + "\\s*円?");
@@ -743,7 +718,6 @@
         if(!isNaN(num)) return num;
       }
     }
-
     // 優先2: 「12,345円」形式と、「¥12,345」「￥12,345」形式を文書全体から探し、キーワードに一番近いものを採用
     const numRe = /(?:[¥￥]\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,}))|(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})\s*円)/g;
     let best = null, bestDist = Infinity, maxFallback = null;
@@ -760,7 +734,6 @@
     }
     if(best !== null) return best;
     if(maxFallback !== null) return maxFallback;
-
     // 優先3: 最後の手段として、キーワードと同じ行にある数字を採用する(¥・円マークが無い場合向け)
     const lineNumRe = new RegExp(numToken);
     const lines = text.split(/\r?\n/);
@@ -774,10 +747,8 @@
         }
       }
     }
-
     return null;
   }
-
   function extractVendorCandidate(text){
     const corpRe = /[^\s、。\n]{2,20}(?:株式会社|有限会社|合同会社|㈱|㈲)/g;
     const candidates = [];
@@ -793,7 +764,6 @@
     // 正式名称（法人格を含む）で返す。㈱・㈲は正式表記の「株式会社」「有限会社」に変換する
     return candidates[0].name.replace(/㈱/g, "株式会社").replace(/㈲/g, "有限会社").trim();
   }
-
   // ---- Google OCR (experimental) ----
   // 選択したPDFをGAS経由でGoogleドライブの無料OCRに一時的に送信してテキスト化し、
   // 発行月・金額・取引先名の自動入力に使う。文字情報を持つPDF・スキャン画像PDFの両方に対応。
@@ -805,7 +775,6 @@
       reader.readAsDataURL(file);
     });
   }
-
   async function ocrViaGas(file){
     const base64 = await fileToBase64(file);
     const payload = {
@@ -825,7 +794,6 @@
     if(!json.ok) throw new Error(json.error || "OCRに失敗しました");
     return json.text || "";
   }
-
   el("ocrBtn").addEventListener("click", async ()=>{
     const file = pdfFileEl.files[0];
     if(!file){ showToast("先にPDFファイルを選択してください"); return; }
@@ -838,13 +806,11 @@
         addMsg("warn", "OCRでも文字を読み取れませんでした。手動で入力してください。");
         return;
       }
-
       const dateC = extractDateCandidate(text);
       const amountC = extractAmountCandidate(text);
       const vendorC = extractVendorCandidate(text);
       let filledAny = false;
       const missing = [];
-
       if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
         const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
         issueDateEl.value = `${y}-${mo}`;
@@ -860,7 +826,6 @@
         rememberVendor(vendorC); // 読み取れた正式名称は、重複がなければ取引先名リストにも自動追加する
         filledAny = true;
       } else { missing.push("取引先名"); }
-
       if(filledAny && missing.length === 0){
         addMsg("warn", "Google OCRで読み取った文字から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
       } else if(filledAny){
@@ -876,7 +841,111 @@
       btn.disabled = false;
     }
   });
-
+  // ==== 【新規】経理：拠点振り分けキュー ====
+  async function callGasAction(action, extra){
+    const payload = Object.assign({ key: GAS_KEY, action: action, operator: currentUserEmail || "" }, extra || {});
+    const res = await fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error("サーバーエラー（" + res.status + "）");
+    return res.json();
+  }
+  async function loadPendingQueue(){
+    if(!currentUserEmail){ pendingCard.style.display = "none"; return; }
+    try{
+      const json = await callGasAction("list_pending");
+      if(!json.ok){ pendingCard.style.display = "none"; return; } // 経理担当者でない場合はここで非表示のまま
+      pendingCard.style.display = "block";
+      renderPendingList(json.items || []);
+    }catch(e){
+      pendingCard.style.display = "none";
+    }
+  }
+  function renderPendingList(items){
+    pendingList.innerHTML = "";
+    if(items.length === 0){
+      pendingList.innerHTML = `<p class="file-hint">現在、振り分け待ちの請求書はありません。</p>`;
+      return;
+    }
+    items.forEach(item=>{
+      const box = document.createElement("div");
+      box.className = "card";
+      box.style.background = "#FAFBFD";
+      box.style.marginBottom = "12px";
+      const rowId = "split_" + item.rowIndex;
+      box.innerHTML = `
+        <div style="font-size:13px; margin-bottom:8px;">
+          <strong>${item.vendor}</strong>（発行月：${item.dateStr}／合計 ${Number(item.amount).toLocaleString("ja-JP")}円）<br>
+          <span class="file-hint">ファイル：${item.filename}／申請者：${item.submitter || "-"}（${item.submitterEmail || "-"}）／保存先：${item.folder || "-"}</span>
+        </div>
+        <div id="${rowId}_rows"></div>
+        <div class="actions" style="margin-top:8px;">
+          <button class="btn secondary" data-add-split="${item.rowIndex}">拠点を追加</button>
+          <button class="btn" data-confirm-split="${item.rowIndex}">この内容で確定</button>
+        </div>
+        <div class="msg-list" id="${rowId}_msg"></div>
+      `;
+      pendingList.appendChild(box);
+      addSplitRow(item.rowIndex); // 最初の1行を追加しておく
+    });
+  }
+  function addSplitRow(rowIndex){
+    const container = el("split_" + rowIndex + "_rows");
+    const rowDiv = document.createElement("div");
+    rowDiv.className = "row";
+    rowDiv.style.marginBottom = "6px";
+    const siteOptions = DEFAULT_SITES.map(s=>`<option value="${s}">${s}</option>`).join("");
+    rowDiv.innerHTML = `
+      <div class="field" style="min-width:140px; flex:1;">
+        <select class="split-site">${siteOptions}</select>
+      </div>
+      <div class="field" style="min-width:120px; flex:1;">
+        <input type="text" class="split-amount" inputmode="numeric" placeholder="金額">
+      </div>
+      <button class="icon-btn" data-remove-split="1">×</button>
+    `;
+    container.appendChild(rowDiv);
+    rowDiv.querySelector(".split-amount").addEventListener("input", (e)=>{
+      e.target.value = e.target.value.replace(/[^0-9]/g, "");
+    });
+    rowDiv.querySelector("[data-remove-split]").addEventListener("click", ()=> rowDiv.remove());
+  }
+  pendingList.addEventListener("click", async (e)=>{
+    const addRowIdx = e.target.getAttribute("data-add-split");
+    if(addRowIdx){ addSplitRow(addRowIdx); return; }
+    const confirmRowIdx = e.target.getAttribute("data-confirm-split");
+    if(confirmRowIdx){
+      const container = el("split_" + confirmRowIdx + "_rows");
+      const msgBox = el("split_" + confirmRowIdx + "_msg");
+      msgBox.innerHTML = "";
+      const splits = [];
+      container.querySelectorAll(".row").forEach(rowDiv=>{
+        const site = rowDiv.querySelector(".split-site").value;
+        const amount = Number(rowDiv.querySelector(".split-amount").value || "0");
+        if(site && amount > 0) splits.push({ site, amount });
+      });
+      if(splits.length === 0){
+        msgBox.innerHTML = `<div class="msg warn">拠点と金額を1件以上入力してください。</div>`;
+        return;
+      }
+      e.target.disabled = true;
+      try{
+        const json = await callGasAction("submit_allocation", { rowIndex: Number(confirmRowIdx), splits: splits });
+        if(!json.ok){
+          msgBox.innerHTML = `<div class="msg danger">${json.error || "確定に失敗しました"}</div>`;
+          e.target.disabled = false;
+          return;
+        }
+        showToast("拠点振り分けを確定しました");
+        await loadPendingQueue();
+      }catch(err){
+        msgBox.innerHTML = `<div class="msg danger">通信エラー：${err.message}</div>`;
+        e.target.disabled = false;
+      }
+    }
+  });
   // ---- init ----
   renderSiteSelect();
   renderVendorList();
