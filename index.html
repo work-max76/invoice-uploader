@@ -741,21 +741,43 @@
     return null;
   }
   function extractAmountCandidate(text, customKeywords){
-    const keywords = customKeywords || ["ご請求金額","御請求金額","請求金額","合計金額","税込合計","お支払金額","合計"];
+    // 「今回ご請求金額」等は表中に繰り返し出る「請求金額(10%対象)」等の見出しと違い1箇所しか
+    // 出現せず、税抜内訳(本体金額)と混同されにくいため優先度を高くしている
+    const keywords = customKeywords || ["今回ご請求金額","今回のご請求金額","ご請求金額","御請求金額","請求金額","合計金額","税込合計","お支払金額","合計"];
     const keywordIdx = [];
     keywords.forEach(k=>{
       let idx = text.indexOf(k);
       while(idx !== -1){ keywordIdx.push({ idx, len: k.length }); idx = text.indexOf(k, idx + 1); }
     });
     const numToken = "([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})";
-    // 優先1: 「ご請求金額」等の直後(50文字以内)にある数字は、¥や円が付いていなくても最優先で採用する
+    // 「2026/08/31」「2026年8月31日」等の日付の一部を金額と誤認しないよう、数字の前後が
+    // 日付・時刻の区切り文字でないことを確認する
+    function isDatePart(str, idx, len){
+      const before = str.slice(Math.max(0, idx - 1), idx);
+      const after = str.slice(idx + len, idx + len + 1);
+      return /[\/\-年月日:時分]/.test(before) || /[\/\-年月日:時分]/.test(after);
+    }
+    // 優先1: 「ご請求金額」等の直後(50文字以内)にある数字を採用する。
     // (OCRではラベルと金額の間の余白が多数の空白文字になることがあるため、範囲を広めに取る)
-    const nearNumRe = new RegExp("[¥￥]?\\s*" + numToken + "\\s*円?");
+    // ¥・円付きの数字を最優先し、無ければ日付でない裸の数字を採用する
+    const markedRe = /[¥￥]\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})|([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})\s*円/g;
     for(const kw of keywordIdx){
       const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + 50);
-      const nm = after.match(nearNumRe);
-      if(nm){
-        const num = parseInt(nm[1].replace(/,/g, ""), 10);
+      markedRe.lastIndex = 0;
+      const mm = markedRe.exec(after);
+      if(mm){
+        const num = parseInt((mm[1] || mm[2]).replace(/,/g, ""), 10);
+        if(!isNaN(num)) return num;
+      }
+    }
+    const bareRe = new RegExp(numToken, "g");
+    for(const kw of keywordIdx){
+      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + 50);
+      bareRe.lastIndex = 0;
+      let mm;
+      while((mm = bareRe.exec(after))){
+        if(isDatePart(after, mm.index, mm[0].length)) continue;
+        const num = parseInt(mm[1].replace(/,/g, ""), 10);
         if(!isNaN(num)) return num;
       }
     }
@@ -776,13 +798,15 @@
     if(best !== null) return best;
     if(maxFallback !== null) return maxFallback;
     // 優先3: 最後の手段として、キーワードと同じ行にある数字を採用する(¥・円マークが無い場合向け)
-    const lineNumRe = new RegExp(numToken);
+    const lineNumRe = new RegExp(numToken, "g");
     const lines = text.split(/\r?\n/);
     for(const kw of keywords){
       for(const line of lines){
         if(line.indexOf(kw) === -1) continue;
-        const nm = line.match(lineNumRe);
-        if(nm){
+        lineNumRe.lastIndex = 0;
+        let nm;
+        while((nm = lineNumRe.exec(line))){
+          if(isDatePart(line, nm.index, nm[0].length)) continue;
           const num = parseInt(nm[1].replace(/,/g, ""), 10);
           if(!isNaN(num)) return num;
         }
@@ -791,19 +815,29 @@
     return null;
   }
   function extractVendorCandidate(text){
-    const corpRe = /[^\s、。\n]{2,20}(?:株式会社|有限会社|合同会社|㈱|㈲)/g;
+    // 法人格は「〇〇株式会社」のように末尾に付く場合と、「株式会社〇〇」のように先頭に付く
+    // 場合の両方があるため、両方のパターンにマッチさせる
+    const corpRe = /(?:株式会社|有限会社|合同会社|㈱|㈲)[^\s、。\n]{1,20}|[^\s、。\n]{1,20}(?:株式会社|有限会社|合同会社|㈱|㈲)/g;
     const candidates = [];
     let m;
     while((m = corpRe.exec(text))){
-      candidates.push({ name: m[0], index: m.index });
+      // 直後に「御中」「様」が続く社名は、請求書の宛先(＝自社)であって請求元ではないため区別する
+      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 6);
+      const isAddressee = /^\s*(御中|様)/.test(after);
+      candidates.push({ name: m[0], index: m.index, isAddressee });
     }
     if(candidates.length === 0) return null;
-    const regIdx = text.search(/T\d{13}/);
+    // 宛先(御中/様)以外の候補を優先する。他に候補がなければ宛先候補も対象にする
+    const nonAddressee = candidates.filter(c => !c.isAddressee);
+    const pool = nonAddressee.length > 0 ? nonAddressee : candidates;
+    // インボイス登録番号(T+数字)の近くにある社名を請求元として優先する。
+    // OCRでの桁誤読・空白混入に対応するため、桁数は11〜14桁で緩めに一致させる
+    const regIdx = text.search(/T[\s]*\d[\d\s]{9,15}\d/);
     if(regIdx !== -1){
-      candidates.sort((a,b)=> Math.abs(a.index - regIdx) - Math.abs(b.index - regIdx));
+      pool.sort((a,b)=> Math.abs(a.index - regIdx) - Math.abs(b.index - regIdx));
     }
     // 正式名称（法人格を含む）で返す。㈱・㈲は正式表記の「株式会社」「有限会社」に変換する
-    return candidates[0].name.replace(/㈱/g, "株式会社").replace(/㈲/g, "有限会社").trim();
+    return pool[0].name.replace(/㈱/g, "株式会社").replace(/㈲/g, "有限会社").trim();
   }
   // ---- Google OCR (experimental) ----
   // 選択したPDFをGAS経由でGoogleドライブの無料OCRに一時的に送信してテキスト化し、
