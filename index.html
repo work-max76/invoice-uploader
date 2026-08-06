@@ -1042,6 +1042,12 @@
         const json = await callGasAction("submit_allocation", { rowIndex: Number(confirmRowIdx), splits: splits });
         if(!json.ok){
           msgBox.innerHTML = `<div class="msg danger">${json.error || "確定に失敗しました"}</div>`;
+          // 「既に処理済み」の場合は、他の担当者が先に確定させたということなので、
+          // 一覧を最新化してこの請求書を消す(重複入力の防止)
+          if((json.error || "").indexOf("処理済み") !== -1){
+            await loadPendingQueue();
+            return;
+          }
           e.target.disabled = false;
           return;
         }
