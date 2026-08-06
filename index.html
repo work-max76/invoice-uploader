@@ -181,6 +181,10 @@
       <button class="btn secondary" id="ocrBtn">PDFから発行月・金額・取引先名を自動入力（OCR）</button>
     </div>
     <p class="file-hint">OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します。自動入力された値は必ず目視で確認・修正してください。</p>
+    <details style="margin-bottom:14px;">
+      <summary>読み取った文字を確認する（うまく抽出できない場合の確認用・一時的に表示中）</summary>
+      <pre id="ocrRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#F7F9FC; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
+    </details>
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
       <textarea id="vendorListArea" placeholder="1行に1取引先名を入力（例：〇〇商事株式会社）"></textarea>
@@ -271,7 +275,7 @@
 (function(){
   const DEFAULT_SITES = [
     "本社","柏インター","大青田","ロジック柏","十余二南","通販","流山駒木","柏の葉","野田船形",
-    "三ツ堀","泉第2","泉第1","幕張","営業","事務センター"
+    "三ツ堀","泉第2","泉第1","幕張","賃貸","事務センター"
   ];
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
@@ -877,6 +881,7 @@
     showToast("Google OCRで読み取っています…（時間がかかる場合があります）");
     try{
       const text = await ocrViaGas(file);
+      el("ocrRawText").textContent = text || "";
       if(!text || text.replace(/\s/g, "").length < 10){
         addMsg("warn", "OCRでも文字を読み取れませんでした。手動で入力してください。");
         return;
@@ -1028,8 +1033,8 @@
   const VEHICLE_MAP = [
     { card: 1, plate: 1107, type: "ベンツ", dept: "事務センター", driver: "伊藤社長" },
     { card: 2, plate: 5552, type: "ティアナ", dept: "泉第3", driver: "哲郎さん" },
-    { card: 4, plate: 8332, type: "グレイス", dept: "営業", driver: "金子" },
-    { card: 5, plate: 19, type: "デミオ", dept: "営業", driver: "差波" },
+    { card: 4, plate: 8332, type: "グレイス", dept: "賃貸", driver: "金子" },
+    { card: 5, plate: 19, type: "デミオ", dept: "賃貸", driver: "差波" },
     { card: 8, plate: 3552, type: "4ｔ", dept: "本社", driver: "本社" },
     { card: 9, plate: 1787, type: "2ｔ", dept: "大青田", driver: "大青田" },
     { card: 10, plate: 1580, type: "2ｔ", dept: "大青田", driver: "大青田" },
@@ -1042,7 +1047,7 @@
     { card: 20, plate: 6935, type: "カローラアオクシオ", dept: "ロジック柏", driver: "LOGIQ佐々木" },
     { card: 21, plate: 5020, type: "フィット", dept: "野田船形", driver: "野田船形" },
     { card: 22, plate: 8400, type: "エブリイ", dept: "大青田", driver: "佐々木徹" },
-    { card: 23, plate: 1134, type: "カローラフィールダー", dept: "営業", driver: "古島" },
+    { card: 23, plate: 1134, type: "カローラフィールダー", dept: "賃貸", driver: "古島" },
     { card: 25, plate: 1480, type: "フィット", dept: "事務センター", driver: "総務人材" },
     { card: 26, plate: 2666, type: "ノート", dept: "インター", driver: "中山" },
     { card: 28, plate: 9474, type: "ステップワゴン", dept: "事務センター", driver: "事務センター" },
@@ -1052,7 +1057,7 @@
     { card: 32, plate: 3480, type: "いすず", dept: "運送", driver: "丸山(運送)" },
     { card: 33, plate: 3481, type: "三菱キャンター", dept: "運送", driver: "大和田(運送)" },
     { card: 34, plate: 3482, type: "三菱ファイター", dept: "運送", driver: "杉本(運送)" },
-    { card: 35, plate: 6634, type: "フィット", dept: "営業", driver: "足立" },
+    { card: 35, plate: 6634, type: "フィット", dept: "賃貸", driver: "足立" },
   ];
   function findVehicleMatches(cardNo){
     return VEHICLE_MAP.filter(v => v.card === cardNo);
