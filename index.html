@@ -961,17 +961,39 @@
           <span class="file-hint">ファイル：${item.filename}／申請者：${item.submitter || "-"}（${item.submitterEmail || "-"}）／保存先：${item.folder || "-"}</span>
         </div>
         <div id="${rowId}_rows"></div>
+        <div class="msg-list" id="${rowId}_sum" style="margin-top:6px;"></div>
         <div class="actions" style="margin-top:8px;">
-          <button class="btn secondary" data-add-split="${item.rowIndex}">拠点を追加</button>
+          <button class="btn secondary" data-add-split="${item.rowIndex}" data-total="${item.amount}">拠点を追加</button>
           <button class="btn" data-confirm-split="${item.rowIndex}">この内容で確定</button>
         </div>
         <div class="msg-list" id="${rowId}_msg"></div>
       `;
       pendingList.appendChild(box);
-      addSplitRow(item.rowIndex); // 最初の1行を追加しておく
+      addSplitRow(item.rowIndex, item.amount); // 最初の1行を追加しておく
     });
   }
-  function addSplitRow(rowIndex){
+  // 入力済みの拠点別金額の合計と、請求書合計を見比べて表示する
+  function updateSplitSum(rowIndex, totalAmount){
+    const container = el("split_" + rowIndex + "_rows");
+    const sumBox = el("split_" + rowIndex + "_sum");
+    if(!container || !sumBox) return;
+    let sum = 0;
+    container.querySelectorAll(".split-amount").forEach(inp=>{
+      sum += Number(inp.value || "0");
+    });
+    const total = Number(totalAmount) || 0;
+    sumBox.innerHTML = "";
+    const d = document.createElement("div");
+    if(sum === total && total > 0){
+      d.className = "msg ok";
+      d.textContent = `入力合計 ${sum.toLocaleString("ja-JP")}円 ＝ 請求書合計 ${total.toLocaleString("ja-JP")}円`;
+    } else {
+      d.className = "msg warn";
+      d.textContent = `入力合計 ${sum.toLocaleString("ja-JP")}円／請求書合計 ${total.toLocaleString("ja-JP")}円（差額 ${(sum-total).toLocaleString("ja-JP")}円）`;
+    }
+    sumBox.appendChild(d);
+  }
+  function addSplitRow(rowIndex, totalAmount){
     const container = el("split_" + rowIndex + "_rows");
     const rowDiv = document.createElement("div");
     rowDiv.className = "row";
@@ -989,12 +1011,17 @@
     container.appendChild(rowDiv);
     rowDiv.querySelector(".split-amount").addEventListener("input", (e)=>{
       e.target.value = e.target.value.replace(/[^0-9]/g, "");
+      updateSplitSum(rowIndex, totalAmount);
     });
-    rowDiv.querySelector("[data-remove-split]").addEventListener("click", ()=> rowDiv.remove());
+    rowDiv.querySelector("[data-remove-split]").addEventListener("click", ()=>{
+      rowDiv.remove();
+      updateSplitSum(rowIndex, totalAmount);
+    });
+    updateSplitSum(rowIndex, totalAmount);
   }
   pendingList.addEventListener("click", async (e)=>{
     const addRowIdx = e.target.getAttribute("data-add-split");
-    if(addRowIdx){ addSplitRow(addRowIdx); return; }
+    if(addRowIdx){ addSplitRow(addRowIdx, e.target.getAttribute("data-total")); return; }
     const confirmRowIdx = e.target.getAttribute("data-confirm-split");
     if(confirmRowIdx){
       const container = el("split_" + confirmRowIdx + "_rows");
