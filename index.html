@@ -523,6 +523,23 @@
     if(!y || !m) return "";
     return y.slice(2) + m;
   }
+  // 記録時刻(ISO文字列・UTC)を、日本時間(Asia/Tokyo)の表示用文字列に変換する。
+  // new Date().toISOString()はUTC基準のため、そのまま表示すると実際の操作時刻より9時間早く見えてしまう。
+  function toJstDisplay(isoStr){
+    if(!isoStr) return "";
+    const d = new Date(isoStr);
+    if(isNaN(d.getTime())) return isoStr;
+    try{
+      const parts = new Intl.DateTimeFormat("ja-JP", {
+        timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hour12: false
+      }).formatToParts(d);
+      const get = t => (parts.find(p => p.type === t) || {}).value || "";
+      return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+    }catch(e){
+      return (isoStr || "").replace("T", " ").slice(0, 16);
+    }
+  }
   function sanitize(str){ return (str || "").trim(); }
   function hasForbidden(str){ FORBIDDEN.lastIndex = 0; return FORBIDDEN.test(str || ""); }
   function stripForbidden(str){ return (str || "").replace(FORBIDDEN, ""); }
@@ -649,7 +666,7 @@
         ? `<span class="badge up">アップロード済</span>`
         : `<span class="badge dl">ダウンロードのみ</span>`;
       tr.innerHTML = `
-        <td>${(item.time||"").replace("T"," ").slice(0,16)}</td>
+        <td>${toJstDisplay(item.time)}</td>
         <td>${item.dateStr}</td>
         <td>${item.site}</td>
         <td>${item.submitter || "-"}</td>
@@ -678,12 +695,12 @@
     const list = getList();
     if(list.length === 0){ showToast("履歴がありません"); return; }
     const header = "日時,発行月,拠点名,担当者名,取引先名,金額,ファイル名,保存先フォルダ,方法\n";
-    const rows = list.map(i => `${i.time},${i.dateStr},${i.site},${i.submitter || ""},${i.vendor},${i.amount},${i.filename},${i.folder || ""},${i.method}`).join("\n");
+    const rows = list.map(i => `${toJstDisplay(i.time)},${i.dateStr},${i.site},${i.submitter || ""},${i.vendor},${i.amount},${i.filename},${i.folder || ""},${i.method}`).join("\n");
     const csv = "﻿" + header + rows;
     const blob = new Blob([csv], {type: "text/csv;charset=utf-8;"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const ymd = new Date().toISOString().slice(0,10).replace(/-/g,"");
+    const ymd = toJstDisplay(new Date().toISOString()).slice(0,10).replace(/-/g,"");
     a.href = url; a.download = `請求書アップロード履歴_${ymd}.csv`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
