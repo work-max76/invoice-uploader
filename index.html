@@ -225,7 +225,7 @@
     <p class="file-hint">拠点名の記載がない請求書の一覧です。拠点ごとの金額を入力して確定すると、自動で仕訳対象（アップロード履歴）に反映されます。この画面は経理担当者のみに表示されます。</p>
     <div id="pendingList"></div>
   </div>
-  <div class="card">
+  <div class="card" id="gasCardCard" style="display:none;">
     <h2>6. ガソリンカード請求書の自動仕訳（車両ごとに部門振り分け）</h2>
     <p class="file-hint">宇田川株式会社（ENEOS特約店）発行の合算請求書をOCRで読み取り、明細内の「車番合計」ごとに車両対応表と照合して、部門（拠点名または担当者名）別に自動で処理履歴へ登録します。件数が多いため、登録前に必ず内容を確認してください。</p>
     <div class="row">
@@ -307,7 +307,8 @@
         folderStatus = el("folderStatus"), folderStatusText = el("folderStatusText"),
         targetFolderStatus = el("targetFolderStatus"), targetFolderText = el("targetFolderText"),
         uploadBtn = el("uploadBtn"),
-        noSiteCheckEl = el("noSiteCheck"), pendingCard = el("pendingCard"), pendingList = el("pendingList");
+        noSiteCheckEl = el("noSiteCheck"), pendingCard = el("pendingCard"), pendingList = el("pendingList"),
+        gasCardCard = el("gasCardCard");
   const NO_SITE_LABEL = "拠点未定";
   const supportsFS = ("showDirectoryPicker" in window);
   if(!supportsFS){
@@ -933,14 +934,16 @@
     return res.json();
   }
   async function loadPendingQueue(){
-    if(!currentUserEmail){ pendingCard.style.display = "none"; return; }
+    if(!currentUserEmail){ pendingCard.style.display = "none"; gasCardCard.style.display = "none"; return; }
     try{
       const json = await callGasAction("list_pending");
-      if(!json.ok){ pendingCard.style.display = "none"; return; } // 経理担当者でない場合はここで非表示のまま
+      if(!json.ok){ pendingCard.style.display = "none"; gasCardCard.style.display = "none"; return; } // 経理担当者でない場合はここで非表示のまま
       pendingCard.style.display = "block";
+      gasCardCard.style.display = "block"; // ガソリンカード自動仕訳も経理担当者のみに表示する
       renderPendingList(json.items || []);
     }catch(e){
       pendingCard.style.display = "none";
+      gasCardCard.style.display = "none";
     }
   }
   function renderPendingList(items){
