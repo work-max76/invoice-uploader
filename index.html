@@ -765,7 +765,10 @@
   function extractAmountCandidate(text, customKeywords){
     // 「今回ご請求金額」等は表中に繰り返し出る「請求金額(10%対象)」等の見出しと違い1箇所しか
     // 出現せず、税抜内訳(本体金額)と混同されにくいため優先度を高くしている
-    const keywords = customKeywords || ["今回ご請求金額","今回のご請求金額","ご請求金額","御請求金額","請求金額","合計金額","税込合計","お支払金額","合計"];
+    const keywords = customKeywords || [
+      "今回ご請求金額","今回のご請求金額","今回ご請求額","今月ご請求額","当月ご請求額","当月のご請求額",
+      "ご請求金額","御請求金額","請求金額","合計金額","税込合計","お支払金額","合計"
+    ];
     const keywordIdx = [];
     keywords.forEach(k=>{
       let idx = text.indexOf(k);
