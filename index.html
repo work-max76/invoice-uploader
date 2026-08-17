@@ -1032,7 +1032,20 @@
         <div class="msg-list" id="${rowId}_msg"></div>
       `;
       pendingList.appendChild(box);
-      addSplitRow(item.rowIndex, item.amount); // 最初の1行を追加しておく
+      // 【新規】GAS側の「拠点按分ルール」に登録がある取引先は、拠点と金額を自動入力する。
+      // 金額はその場で修正できるので、確定するかどうかは経理担当者の判断のまま。
+      if(Array.isArray(item.suggested) && item.suggested.length > 0){
+        item.suggested.forEach(s=> addSplitRow(item.rowIndex, item.amount, s.site, s.amount));
+        const msgBox = el("split_" + item.rowIndex + "_msg");
+        if(msgBox){
+          const d = document.createElement("div");
+          d.className = "msg warn";
+          d.textContent = "「拠点按分ルール」に登録された比率で自動入力しました。金額に間違いがないか確認してから確定してください。";
+          msgBox.appendChild(d);
+        }
+      } else {
+        addSplitRow(item.rowIndex, item.amount); // 最初の1行を追加しておく
+      }
     });
   }
   // 入力済みの拠点別金額の合計と、請求書合計を見比べて表示する
@@ -1056,18 +1069,21 @@
     }
     sumBox.appendChild(d);
   }
-  function addSplitRow(rowIndex, totalAmount){
+  // presetSite / presetAmount を渡すと、その拠点・金額を初期値としてセットする(按分ルールによる自動入力用)
+  function addSplitRow(rowIndex, totalAmount, presetSite, presetAmount){
     const container = el("split_" + rowIndex + "_rows");
     const rowDiv = document.createElement("div");
     rowDiv.className = "row";
     rowDiv.style.marginBottom = "6px";
-    const siteOptions = DEFAULT_SITES.map(s=>`<option value="${s}">${s}</option>`).join("");
+    const siteOptions = DEFAULT_SITES.map(s=>
+      `<option value="${s}"${s === presetSite ? " selected" : ""}>${s}</option>`
+    ).join("");
     rowDiv.innerHTML = `
       <div class="field" style="min-width:140px; flex:1;">
         <select class="split-site">${siteOptions}</select>
       </div>
       <div class="field" style="min-width:120px; flex:1;">
-        <input type="text" class="split-amount" inputmode="numeric" placeholder="金額">
+        <input type="text" class="split-amount" inputmode="numeric" placeholder="金額" value="${presetAmount != null ? presetAmount : ""}">
       </div>
       <button class="icon-btn" data-remove-split="1">×</button>
     `;
