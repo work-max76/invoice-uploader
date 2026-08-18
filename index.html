@@ -971,9 +971,10 @@
     });
   }
   // PDFの指定ページをCanvasに描画し、画像(PNG)のBlobとして返す
-  async function pdfPageToImageBlob(pdf, pageNo){
+  async function pdfPageToImageBlob(pdf, pageNo, scale){
     const page = await pdf.getPage(pageNo);
-    const scale = 2.2; // OCR精度を保ちつつ転送量を抑えるための拡大率（おおよそ150〜160dpi相当）
+    // 既定は2.2倍（おおよそ150〜160dpi相当）。OCRが失敗した場合は倍率を下げて再試行する
+    scale = scale || 2.2;
     const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
@@ -996,24 +997,47 @@
     const pdf = await loadPdf(file);
     return pdfPageToImageBlob(pdf, 1);
   }
+  const sleep = (ms)=> new Promise(r=> setTimeout(r, ms));
+  // 読み取れた文字数がこれ未満なら、OCRが失敗したものとして再試行する
+  const OCR_MIN_CHARS = 50;
+
   // 【新規】全ページを1枚ずつ画像化してOCRにかけ、結果を連結して返す。
   //
   // 複数ページのPDFをそのままGoogleドライブOCRに渡すと、実行のたびに
   // 1ページ目だけ・2ページ目だけといった具合に取りこぼしが発生する。
   // ページ単位で個別に送ることで、全ページが確実にテキスト化される。
-  // onProgress(現在のページ, 総ページ数) で進捗を通知する。
+  //
+  // また、ドライブのOCR変換を短時間に連続で呼ぶと2回目以降が空で返ることがあるため、
+  // ページ間に待機を入れ、空だった場合は待ち時間を延ばして再試行する。
+  // onProgress(現在のページ, 総ページ数, 試行回数) で進捗を通知する。
   async function ocrAllPagesViaGas(file, onProgress){
     const pdf = await loadPdf(file);
     const total = pdf.numPages;
+    const baseName = (file.name || "invoice").replace(/\.pdf$/i, "");
     const texts = [];
+    const failedPages = [];
     for(let p = 1; p <= total; p++){
-      if(onProgress) onProgress(p, total);
-      const blob = await pdfPageToImageBlob(pdf, p);
-      const baseName = (file.name || "invoice").replace(/\.pdf$/i, "");
-      const pageFile = new File([blob], `${baseName}_p${p}.png`, { type: "image/png" });
-      texts.push(await ocrViaGas(pageFile));
+      let pageText = "";
+      for(let attempt = 1; attempt <= 3; attempt++){
+        if(onProgress) onProgress(p, total, attempt);
+        // 3回目は画像サイズが大きすぎる可能性を考え、倍率を下げて試す
+        const scale = (attempt < 3) ? 2.2 : 1.6;
+        const blob = await pdfPageToImageBlob(pdf, p, scale);
+        const pageFile = new File([blob], `${baseName}_p${p}.png`, { type: "image/png" });
+        try{
+          pageText = await ocrViaGas(pageFile);
+        }catch(e){
+          pageText = "";
+        }
+        if(pageText.replace(/\s/g, "").length >= OCR_MIN_CHARS) break;
+        if(attempt < 3) await sleep(attempt * 2000); // 2秒 → 4秒と待ち時間を延ばして再試行
+      }
+      if(pageText.replace(/\s/g, "").length < OCR_MIN_CHARS) failedPages.push(p);
+      // どのページの内容かを確認できるよう、区切りを入れておく
+      texts.push(`===== ${p}ページ目 =====\n` + pageText);
+      if(p < total) await sleep(1500); // 次のページを送る前に少し間を空ける
     }
-    return { text: texts.join("\n"), pages: total };
+    return { text: texts.join("\n"), pages: total, failedPages: failedPages };
   }
   // opts.firstPageOnly が true の場合、PDFの1ページ目だけを画像化してOCRに渡す（対応：通常の請求書OCR用）。
   // 画像化に失敗した場合は、従来どおりPDF全体をそのままOCRに渡すフォールバック動作になる。
@@ -1381,12 +1405,13 @@
     try{
       // 複数ページのPDFをまとめて送るとページの取りこぼしが起きるため、
       // 1ページずつ画像化して個別にOCRし、結果を連結する
-      let text = "", pages = 1;
+      let text = "", pages = 1, failedPages = [];
       try{
-        const r = await ocrAllPagesViaGas(file, (p, total)=>{
-          showToast(`Google OCRで読み取っています…（${p}/${total}ページ）`);
+        const r = await ocrAllPagesViaGas(file, (p, total, attempt)=>{
+          showToast(`Google OCRで読み取っています…（${p}/${total}ページ` +
+            (attempt > 1 ? `・再試行${attempt - 1}回目` : "") + "）");
         });
-        text = r.text; pages = r.pages;
+        text = r.text; pages = r.pages; failedPages = r.failedPages || [];
       }catch(convErr){
         // pdf.jsが使えない等で画像化できない場合は、従来どおりPDFをそのまま送る
         console.warn("ページ単位のOCRに失敗したため、PDF全体を送信します：", convErr);
@@ -1397,7 +1422,14 @@
         gcAddMsg(gcMsgList, "warn", "OCRで文字を読み取れませんでした。スキャン画質を確認するか、手動で処理してください。");
         return;
       }
-      if(pages > 1) gcAddMsg(gcMsgList, "ok", `${pages}ページを読み取りました。`);
+      if(failedPages.length > 0){
+        // 読み取れなかったページがあると、その頁のカードが丸ごと抜け落ちるため強く警告する
+        gcAddMsg(gcMsgList, "danger",
+          `${pages}ページ中、${failedPages.join("・")}ページ目を読み取れませんでした。` +
+          `そのページ分のカードが抜けています。もう一度「OCRで読み取り」を実行するか、抜けた分を手動で追加してください。`);
+      } else if(pages > 1){
+        gcAddMsg(gcMsgList, "ok", `${pages}ページすべてを読み取りました。`);
+      }
       const dateC = extractDateCandidate(text);
       if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
         const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
