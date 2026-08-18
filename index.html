@@ -692,6 +692,39 @@
     renderList();
     postToGas(entry, gasAction || "record");
   }
+  // 複数行をまとめて1回の通信で記録する。
+  // 1行ずつpostToGasを繰り返すと、十数件が同時にApps Scriptへ届いて書き込みが
+  // 欠落するため、ガソリンカードのように多数の行を登録する場合は必ずこちらを使う。
+  // 実際に書き込まれた件数を返すので、呼び出し側で欠落を検知できる。
+  async function addHistoryBatch(entries){
+    if(!entries || entries.length === 0) return 0;
+    const list = getList();
+    entries.forEach(e=> list.unshift(e));
+    saveList(list);
+    renderList();
+    if(!GAS_URL) return entries.length;
+    const payload = {
+      key: GAS_KEY,
+      action: "record_batch",
+      operator: currentUserEmail || "",
+      items: entries.map(e=>({
+        dateStr: e.dateStr || "", site: e.site || "", vendor: e.vendor || "",
+        amount: e.amount || "", filename: e.filename || "", folder: e.folder || "",
+        method: e.method || "", submitter: e.submitter || "",
+        debitAccount: e.debitAccount || "", debitSubAccount: e.debitSubAccount || "",
+        debitTaxType: e.debitTaxType || ""
+      }))
+    };
+    const res = await fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error("サーバーエラー（" + res.status + "）");
+    const json = await res.json();
+    if(!json.ok) throw new Error(json.error || "記録に失敗しました");
+    return json.written || 0;
+  }
   function renderList(){
     const list = getList();
     listBody.innerHTML = "";
@@ -1481,23 +1514,19 @@
     }
     const now = new Date().toISOString();
     const submitter = sanitize(submitterNameEl.value);
-    let written = 0;
+    const entries = [];
 
     // 【燃料費】カードごとに1行。補助科目はカード番号、税区分は課税仕入10%。
     rows.forEach(r=>{
       if(r.fuel <= 0) return;
-      addHistory(
-        {
-          time: now, dateStr, site: r.dept, vendor, amount: r.fuel,
-          filename: baseFilename + "(" + r.dept + "・カード" + r.cardNo + "燃料費分)",
-          folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
-          debitAccount: r.division ? `燃料費（${r.division}）` : "",
-          debitSubAccount: r.cardNo,
-          debitTaxType: "課税仕入 10%"
-        },
-        "record"
-      );
-      written++;
+      entries.push({
+        time: now, dateStr, site: r.dept, vendor, amount: r.fuel,
+        filename: baseFilename + "(" + r.dept + "・カード" + r.cardNo + "燃料費分)",
+        folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
+        debitAccount: r.division ? `燃料費（${r.division}）` : "",
+        debitSubAccount: r.cardNo,
+        debitTaxType: "課税仕入 10%"
+      });
     });
 
     // 【租税公課(軽油税)】補助科目が「軽油税」で共通のため、部門×売販でまとめて1行にする。
@@ -1505,33 +1534,49 @@
     const taxGroups = {};
     rows.forEach(r=>{
       if(!r.dieselTax || r.dieselTax <= 0) return;
-      const key = r.dept + " " + r.division;
+      const key = r.dept + " " + r.division;
       if(!taxGroups[key]) taxGroups[key] = { dept: r.dept, division: r.division, amount: 0 };
       taxGroups[key].amount += r.dieselTax;
     });
     Object.keys(taxGroups).forEach(key=>{
       const t = taxGroups[key];
-      addHistory(
-        {
-          time: now, dateStr, site: t.dept, vendor, amount: t.amount,
-          filename: baseFilename + "(" + t.dept + "・軽油税分)",
-          folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
-          debitAccount: t.division ? `租税公課（${t.division}）` : "",
-          debitSubAccount: "軽油税",
-          debitTaxType: "対象外"
-        },
-        "record"
-      );
-      written++;
+      entries.push({
+        time: now, dateStr, site: t.dept, vendor, amount: t.amount,
+        filename: baseFilename + "(" + t.dept + "・軽油税分)",
+        folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
+        debitAccount: t.division ? `租税公課（${t.division}）` : "",
+        debitSubAccount: "軽油税",
+        debitTaxType: "対象外"
+      });
     });
 
+    // 1行ずつ送ると同時アクセスで書き込みが欠落するため、まとめて1回の通信で送る
+    const regBtn = el("gcRegisterBtn");
+    regBtn.disabled = true;
+    showToast(entries.length + "件を登録しています…");
+    let written = 0;
+    try{
+      written = await addHistoryBatch(entries);
+    }catch(e){
+      gcAddMsg(gcMsgList, "danger", "登録に失敗しました：" + e.message + "。スプレッドシートを確認し、必要であればもう一度登録してください。");
+      return;
+    }finally{
+      regBtn.disabled = false;
+    }
+
     rememberVendor(vendor);
+    if(written !== entries.length){
+      // 件数が合わない場合は、気づかず次に進まないよう画面に警告を残す
+      gcAddMsg(gcMsgList, "danger",
+        `登録件数が想定と一致しません（送信 ${entries.length} 件／記録 ${written} 件）。スプレッドシートを確認してください。`);
+      return;
+    }
     showToast(written + "件の仕訳を登録しました（燃料費・租税公課に分割）");
     gcResultWrap.style.display = "none";
     gcResultBody.innerHTML = "";
     gcMsgList.innerHTML = "";
     gcFileEl.value = "";
-    gcFileHint.textContent = "宇田川株式会社発行の合算請求書PDFを選択してください。";
+    gcFileHint.textContent = "宇田川株式会社発行の合算請求書PDFを選択してください。"
   });
   // ---- init ----
   renderSiteSelect();
