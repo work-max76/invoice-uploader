@@ -220,6 +220,10 @@
     </table>
     <div class="actions">
       <button class="btn secondary" id="downloadCsvBtn">履歴をCSVでダウンロード</button>
+      <button class="btn secondary" id="clearAllBtn">履歴をすべて削除</button>
+    </div>
+    <div class="file-hint" style="margin-top:6px;">
+      削除されるのはこの端末の画面表示だけです。スプレッドシートの「アップロード履歴」と共有フォルダのPDFは残ります。
     </div>
   </div>
   <div class="card" id="pendingCard" style="display:none;">
@@ -725,6 +729,22 @@
       renderList();
       if(removed) postToGas(removed, "delete_one");
     }
+  });
+  // 処理履歴の一括削除。消えるのはこの端末の表示のみで、スプレッドシートの
+  // 「アップロード履歴」と共有フォルダのPDFはそのまま残る(電子帳簿保存法上の記録を守るため)。
+  el("clearAllBtn").addEventListener("click", ()=>{
+    const list = getList();
+    if(list.length === 0){ showToast("削除する履歴がありません"); return; }
+    const proceed = confirm(
+      `この端末の処理履歴 ${list.length} 件をすべて画面から消します。よろしいですか？\n\n` +
+      `※スプレッドシートの「アップロード履歴」と、共有フォルダに保存済みのPDFは削除されません。`
+    );
+    if(!proceed) return;
+    // 削除操作をスプレッドシート側にも1件だけ記録として残す(誰がいつ消したかを追えるようにするため)
+    postToGas({ dateStr: "", site: "", vendor: "", amount: list.length, filename: "", folder: "", method: "画面表示のみ削除", submitter: sanitize(submitterNameEl.value) }, "delete_all");
+    saveList([]);
+    renderList();
+    showToast(list.length + "件の履歴を画面から削除しました");
   });
   el("downloadCsvBtn").addEventListener("click", ()=>{
     const list = getList();
