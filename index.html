@@ -144,7 +144,7 @@
       <div class="field">
         <label for="siteSelect">拠点名</label>
         <select id="siteSelect"></select>
-        <div class="file-hint">拠点名リストは全員共通で自動配信されます（このページの管理者がGitHub上のファイルを更新すると反映されます）。</div>
+        <div class="file-hint">拠点名リストは全員共通で自動配信されます（営業車管理スプレッドシートの「拠点名リスト」シートを更新すると反映されます）。</div>
         <div class="file-hint" style="margin-top:8px;">
           <label style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--text); cursor:pointer;">
             <input type="checkbox" id="noSiteCheck" style="width:auto;">
@@ -254,7 +254,7 @@
     <div id="gcResultWrap" style="display:none; margin-top:14px;">
       <table>
         <thead>
-          <tr><th>宇田川カード番号</th><th>ナンバー</th><th>車種</th><th>部門（拠点名／担当者名）</th><th>金額</th><th>状態</th></tr>
+          <tr><th>宇田川カード番号</th><th>ナンバー</th><th>車種</th><th>部門（拠点名／担当者名）</th><th>売販</th><th>車番合計</th><th>うち軽油税</th><th>燃料費</th><th>状態</th></tr>
         </thead>
         <tbody id="gcResultBody"></tbody>
       </table>
@@ -275,7 +275,9 @@
 <div class="toast" id="toast"></div>
 <script>
 (function(){
-  const DEFAULT_SITES = [
+  // 拠点名リストと車両対応表は、営業車管理スプレッドシートから起動時に読み込んで置き換える。
+  // 読み込めなかった場合(GAS未設定・通信エラー等)は、下記の組み込みリストがそのまま使われる。
+  let DEFAULT_SITES = [
     "本社","柏インター","大青田","ロジック柏","十余二南","通販","流山駒木","柏の葉","野田船形",
     "三ツ堀","泉第2","泉第1","泉第3","幕張","賃貸","営業","運送","事務センター"
   ];
@@ -302,7 +304,28 @@
       }
     }catch(e){ /* Cloudflare Access配下以外（ローカル確認時等）では取得できないため無視 */ }
   }
+  // 営業車管理スプレッドシートから、拠点名リストと車両対応表を取得して置き換える。
+  // 取得できなかった場合は組み込みの既定値のまま動作させる(ツールが止まらないようにするため)。
+  async function loadMasters(){
+    try{
+      const res = await fetch(GAS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ key: GAS_KEY, action: "masters" })
+      });
+      if(!res.ok) return;
+      const json = await res.json();
+      if(Array.isArray(json.sites) && json.sites.length > 0){
+        DEFAULT_SITES = json.sites;
+        renderSiteSelect();
+      }
+      if(Array.isArray(json.vehicles) && json.vehicles.length > 0){
+        VEHICLE_MAP = json.vehicles;
+      }
+    }catch(e){ /* 取得失敗時は組み込みの既定値を使う */ }
+  }
   loadAccessIdentity().then(()=> loadPendingQueue());
+  loadMasters();
   const el = (id) => document.getElementById(id);
   const issueDateEl = el("issueDate"), siteSelectEl = el("siteSelect"), vendorEl = el("vendor"),
         submitterNameEl = el("submitterName"),
@@ -460,8 +483,9 @@
     }catch(e){ /* no handle stored yet */ }
   }
   // ---- Site list ----
-  // 拠点名リストは常にこのファイル内のDEFAULT_SITESを正とする（ローカル保存でのカスタマイズは行わない）。
-  // 変更したい場合はGitHub上でDEFAULT_SITESを書き換えてコミットすれば、全員のページに自動反映される。
+  // 拠点名リストは、営業車管理スプレッドシートの「拠点名リスト」シートを正とする。
+  // シートを書き換えれば、全員のページに自動反映される（GitHubを更新する必要はない）。
+  // シートが読み込めない場合のみ、このファイル内のDEFAULT_SITESが使われる。
   function renderSiteSelect(){
     siteSelectEl.innerHTML = "";
     DEFAULT_SITES.forEach(s=>{
@@ -643,7 +667,12 @@
       folder: entry.folder || "",
       method: entry.method || "",
       operator: currentUserEmail || "",
-      submitter: entry.submitter || ""
+      submitter: entry.submitter || "",
+      // ガソリンカードのように、取引先名では勘定科目が決まらない仕訳のための指定欄。
+      // 通常のアップロードでは空欄のまま送られ、これまで通り勘定科目マスタで照合される。
+      debitAccount: entry.debitAccount || "",
+      debitSubAccount: entry.debitSubAccount || "",
+      debitTaxType: entry.debitTaxType || ""
     };
     // text/plain にすることでプリフライト(OPTIONS)を回避（GAS側はcontentsをJSON.parseするだけなので問題ない）
     fetch(GAS_URL, {
@@ -1142,7 +1171,7 @@
   // 宇田川カード対応表（宇田川カード番号・ナンバー・車種・部門・管理者）。
   // 台数の増減・部門の変更はここを書き換えてコミットすれば全員のページに反映されます。
   // dept＝仕訳で使う部門（拠点名）、driver＝参考表示用の管理者名。
-  const VEHICLE_MAP = [
+  let VEHICLE_MAP = [
     { card: 1, plate: 1107, type: "ベンツ", dept: "事務センター", driver: "伊藤社長" },
     { card: 2, plate: 5552, type: "ティアナ", dept: "泉第3", driver: "哲郎さん" },
     { card: 4, plate: 8332, type: "グレイス", dept: "賃貸", driver: "金子" },
@@ -1174,28 +1203,65 @@
   function findVehicleMatches(cardNo){
     return VEHICLE_MAP.filter(v => v.card === cardNo);
   }
-  // OCRテキストから「(車番合計 NNN)」とその直後の金額の組を全て抽出する
+  // OCRテキストから「(車番合計 NNN)」ごとの合計金額と、そのグループに含まれる軽油税(不課税)を抽出する。
+  //
+  // 請求書の構造:
+  //   6-10 柏インターSS  軽油    32.00  131.00   4,611
+  //   6-24 柏インターSS  軽油    64.00  131.00   9,222
+  //                      軽油税  96.00   15.00   1,440  不課税
+  //        ( 車番合計  009 )
+  //                                             15,273
+  //
+  // ラベルと合計金額の間にレイアウト上の空白が大量に入るため、探索範囲は
+  // 「次の車番合計マーカーの手前まで」とする(以前は40文字固定で未検出が発生していた)。
+  // 軽油税は、そのマーカーより前・前のマーカーより後ろの範囲(=そのカードの明細)から拾う。
+  const GC_NUM_TOKEN = "[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,}";
+  function gcParseNum(s){ return parseInt(String(s).replace(/,/g, ""), 10); }
+
+  // 明細範囲から軽油税(不課税)の合計を求める。
+  // 「軽油税」を含む行で、「不課税」の直前にある金額を優先して拾う。
+  function extractDieselTax(detailText){
+    let sum = 0;
+    detailText.split(/\r?\n/).forEach(line=>{
+      if(line.indexOf("軽油税") === -1) return;
+      // 「… 1,440 不課税」の形を優先
+      const marked = line.match(new RegExp("(" + GC_NUM_TOKEN + ")\\s*(?:円)?\\s*不\\s*課\\s*税"));
+      if(marked){ sum += gcParseNum(marked[1]); return; }
+      // 「不課税」の表記が読めなかった場合は、その行の最後の金額らしき数値を使う
+      const all = line.match(new RegExp(GC_NUM_TOKEN, "g"));
+      if(all && all.length > 0) sum += gcParseNum(all[all.length - 1]);
+    });
+    return sum;
+  }
+
   function extractGasCardGroups(text){
-    const groups = [];
     const markerRe = /車番合計\s*[\(（]?\s*(\d{1,3})\s*[\)）]?/g;
-    const numToken = "([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})";
+    // まず全マーカーの位置を洗い出す
+    const markers = [];
     let m;
     while((m = markerRe.exec(text))){
-      const cardNo = parseInt(m[1], 10);
-      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 40);
-      let amount = null;
-      const nm = after.match(new RegExp(numToken));
-      if(nm){
-        amount = parseInt(nm[1].replace(/,/g, ""), 10);
-      } else {
-        const lineStart = text.lastIndexOf("\n", m.index);
-        const lineEnd = text.indexOf("\n", m.index);
-        const line = text.slice(lineStart === -1 ? 0 : lineStart, lineEnd === -1 ? text.length : lineEnd);
-        const nm2 = line.match(new RegExp(numToken));
-        if(nm2) amount = parseInt(nm2[1].replace(/,/g, ""), 10);
-      }
-      groups.push({ cardNo, amount });
+      markers.push({ cardNo: parseInt(m[1], 10), start: m.index, end: m.index + m[0].length });
     }
+    const groups = [];
+    markers.forEach((mk, i)=>{
+      // 合計金額:このマーカーの直後から、次のマーカーの手前までを探す
+      const searchEnd = (i + 1 < markers.length) ? markers[i + 1].start : text.length;
+      const after = text.slice(mk.end, searchEnd);
+      const nm = after.match(new RegExp(GC_NUM_TOKEN));
+      let amount = nm ? gcParseNum(nm[0]) : null;
+      // 直後に見つからない場合は、同じ行の中を探す(レイアウトによっては金額が左側に来ることがある)
+      if(amount === null){
+        const lineStart = text.lastIndexOf("\n", mk.start);
+        const line = text.slice(lineStart === -1 ? 0 : lineStart, mk.start);
+        const nm2 = line.match(new RegExp(GC_NUM_TOKEN + "(?![\\s\\S]*" + GC_NUM_TOKEN + ")"));
+        if(nm2) amount = gcParseNum(nm2[0]);
+      }
+      // 軽油税:前のマーカーの直後から、このマーカーの手前まで(=このカードの明細行)を対象にする
+      const detailStart = (i > 0) ? markers[i - 1].end : 0;
+      const dieselTax = extractDieselTax(text.slice(detailStart, mk.start));
+      const fuel = (amount !== null) ? (amount - dieselTax) : null;
+      groups.push({ cardNo: mk.cardNo, amount: amount, dieselTax: dieselTax, fuel: fuel });
+    });
     return groups;
   }
   const gcIssueDateEl = el("gcIssueDate"), gcVendorEl = el("gcVendor"), gcFileEl = el("gcFile"),
@@ -1251,7 +1317,7 @@
     gcResultBody.innerHTML = "";
     groups.forEach((g, idx)=>{
       const matches = findVehicleMatches(g.cardNo);
-      let plate = "-", type = "-", dept = "", driver = "";
+      let plate = "-", type = "-", dept = "", driver = "", division = "";
       let status = "";
       if(matches.length === 0){
         status = `<span style="color:var(--danger); font-weight:700;">未登録（要手入力）</span>`;
@@ -1260,11 +1326,23 @@
         type = matches.map(v=>v.type).join(" / ");
         dept = matches[0].dept;
         driver = matches.map(v=>v.driver).join(" / ");
+        division = matches[0].division || "";
         status = `<span style="color:var(--warn); font-weight:700;">カード番号重複あり（要確認）</span>`;
       } else {
-        plate = matches[0].plate; type = matches[0].type; dept = matches[0].dept; driver = matches[0].driver || "";
-        status = g.amount === null ? `<span style="color:var(--warn); font-weight:700;">金額未検出</span>` : "OK";
+        plate = matches[0].plate; type = matches[0].type; dept = matches[0].dept;
+        driver = matches[0].driver || ""; division = matches[0].division || "";
+        if(g.amount === null){
+          status = `<span style="color:var(--warn); font-weight:700;">金額未検出</span>`;
+        } else if(!division){
+          // 売販区分は営業車管理マスタから取得する。未設定だと勘定科目が決まらない
+          status = `<span style="color:var(--warn); font-weight:700;">売販区分が未設定</span>`;
+        } else {
+          status = "OK";
+        }
       }
+      const divOptions = ["", "売", "販"].map(d=>
+        `<option value="${d}"${d === division ? " selected" : ""}>${d || "（未設定）"}</option>`
+      ).join("");
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${String(g.cardNo).padStart(3,"0")}</td>
@@ -1274,12 +1352,16 @@
           <input type="text" class="gc-dept" data-idx="${idx}" value="${dept}" style="width:100%; border:1px solid var(--border); border-radius:4px; padding:4px 6px;">
           ${driver ? `<div class="file-hint" style="margin-top:2px;">管理者：${driver}</div>` : ""}
         </td>
+        <td><select class="gc-division" data-idx="${idx}" style="border:1px solid var(--border); border-radius:4px; padding:4px;">${divOptions}</select></td>
         <td><input type="text" class="gc-amount" data-idx="${idx}" inputmode="numeric" value="${g.amount !== null ? g.amount : ""}" style="width:100%; border:1px solid var(--border); border-radius:4px; padding:4px 6px;"></td>
+        <td><input type="text" class="gc-tax" data-idx="${idx}" inputmode="numeric" value="${g.dieselTax || 0}" style="width:100%; border:1px solid var(--border); border-radius:4px; padding:4px 6px;"></td>
+        <td class="gc-fuel" style="text-align:right; font-weight:600;">-</td>
         <td>${status}</td>
       `;
       gcResultBody.appendChild(tr);
     });
-    gcResultBody.querySelectorAll(".gc-amount").forEach(inp=>{
+    // 車番合計・軽油税のどちらかが変われば、燃料費(差額)と検算を再計算する
+    gcResultBody.querySelectorAll(".gc-amount, .gc-tax").forEach(inp=>{
       inp.addEventListener("input", ()=>{
         inp.value = inp.value.replace(/[^0-9]/g, "");
         updateGcChecksum(totalC);
@@ -1293,7 +1375,17 @@
     gcResultBody.querySelectorAll("tr").forEach(tr=>{
       const dept = tr.querySelector(".gc-dept").value.trim();
       const amount = Number(tr.querySelector(".gc-amount").value || "0");
-      if(dept && amount > 0) rows.push({ dept, amount });
+      const dieselTax = Number(tr.querySelector(".gc-tax").value || "0");
+      const division = tr.querySelector(".gc-division").value.trim();
+      const cardNo = tr.cells[0].textContent.trim();
+      const fuel = amount - dieselTax;
+      // 燃料費(差額)を表示に反映する
+      const fuelCell = tr.querySelector(".gc-fuel");
+      if(fuelCell){
+        fuelCell.textContent = amount > 0 ? fuel.toLocaleString("ja-JP") : "-";
+        fuelCell.style.color = (fuel < 0) ? "var(--danger)" : "";
+      }
+      if(dept && amount > 0) rows.push({ dept, amount, dieselTax, fuel, division, cardNo });
     });
     return rows;
   }
@@ -1301,6 +1393,15 @@
     gcChecksumMsg.innerHTML = "";
     const rows = currentGcRows();
     const sum = rows.reduce((a,r)=> a + r.amount, 0);
+    // 軽油税が車番合計を超えている行は入力ミスなので警告する
+    const minus = rows.filter(r=> r.fuel < 0);
+    if(minus.length > 0){
+      gcAddMsg(gcChecksumMsg, "danger", `軽油税が車番合計を超えている行があります（カード ${minus.map(r=>r.cardNo).join("・")}）。金額を確認してください。`);
+    }
+    const noDiv = rows.filter(r=> !r.division);
+    if(noDiv.length > 0){
+      gcAddMsg(gcChecksumMsg, "warn", `売販区分が未設定の行があります（カード ${noDiv.map(r=>r.cardNo).join("・")}）。営業車管理マスタに登録するか、この画面で選択してください。`);
+    }
     if(totalC){
       if(sum === totalC){
         gcAddMsg(gcChecksumMsg, "ok", `検算OK：部門別合計 ${sum.toLocaleString("ja-JP")}円 ＝ 請求書合計 ${totalC.toLocaleString("ja-JP")}円`);
@@ -1344,14 +1445,53 @@
       return;
     }
     const now = new Date().toISOString();
+    const submitter = sanitize(submitterNameEl.value);
+    let written = 0;
+
+    // 【燃料費】カードごとに1行。補助科目はカード番号、税区分は課税仕入10%。
     rows.forEach(r=>{
+      if(r.fuel <= 0) return;
       addHistory(
-        { time: now, dateStr, site: r.dept, vendor, amount: r.amount, filename: baseFilename + "(" + r.dept + "分)", folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: sanitize(submitterNameEl.value) },
+        {
+          time: now, dateStr, site: r.dept, vendor, amount: r.fuel,
+          filename: baseFilename + "(" + r.dept + "・カード" + r.cardNo + "燃料費分)",
+          folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
+          debitAccount: r.division ? `燃料費（${r.division}）` : "",
+          debitSubAccount: r.cardNo,
+          debitTaxType: "課税仕入 10%"
+        },
         "record"
       );
+      written++;
     });
+
+    // 【租税公課(軽油税)】補助科目が「軽油税」で共通のため、部門×売販でまとめて1行にする。
+    // 税区分は不課税のため対象外。
+    const taxGroups = {};
+    rows.forEach(r=>{
+      if(!r.dieselTax || r.dieselTax <= 0) return;
+      const key = r.dept + " " + r.division;
+      if(!taxGroups[key]) taxGroups[key] = { dept: r.dept, division: r.division, amount: 0 };
+      taxGroups[key].amount += r.dieselTax;
+    });
+    Object.keys(taxGroups).forEach(key=>{
+      const t = taxGroups[key];
+      addHistory(
+        {
+          time: now, dateStr, site: t.dept, vendor, amount: t.amount,
+          filename: baseFilename + "(" + t.dept + "・軽油税分)",
+          folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
+          debitAccount: t.division ? `租税公課（${t.division}）` : "",
+          debitSubAccount: "軽油税",
+          debitTaxType: "対象外"
+        },
+        "record"
+      );
+      written++;
+    });
+
     rememberVendor(vendor);
-    showToast(rows.length + "件の部門に振り分けて登録しました");
+    showToast(written + "件の仕訳を登録しました（燃料費・租税公課に分割）");
     gcResultWrap.style.display = "none";
     gcResultBody.innerHTML = "";
     gcMsgList.innerHTML = "";
