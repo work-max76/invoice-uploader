@@ -909,7 +909,14 @@
     if(candidates.length === 0) return null;
     // 宛先(御中/様)以外の候補を優先する。他に候補がなければ宛先候補も対象にする
     const nonAddressee = candidates.filter(c => !c.isAddressee);
-    const pool = nonAddressee.length > 0 ? nonAddressee : candidates;
+    let pool = nonAddressee.length > 0 ? nonAddressee : candidates;
+    // 法人格を除いた社名部分が1文字だけの候補は、OCRの読み落としである可能性が高いため除外する。
+    // (例:「ENEOS株式会社特約店」の"約店"が読めず「株式会社特」になってしまうケース)
+    // 他に候補が無ければ、除外せずそのまま使う。
+    const enough = pool.filter(c =>
+      c.name.replace(/(株式会社|有限会社|合同会社|㈱|㈲)/g, "").trim().length >= 2
+    );
+    if(enough.length > 0) pool = enough;
     // インボイス登録番号(T+数字)の近くにある社名を請求元として優先する。
     // OCRでの桁誤読・空白混入に対応するため、桁数は11〜14桁で緩めに一致させる
     const regIdx = text.search(/T[\s]*\d[\d\s]{9,15}\d/);
