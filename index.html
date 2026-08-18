@@ -970,13 +970,9 @@
       reader.readAsDataURL(file);
     });
   }
-  // PDFの1ページ目だけをCanvasに描画し、画像(PNG)のBlobとして返す。
-  // これをOCRに渡す元データにすることで、2ページ目以降の内容が一切OCR結果に混ざらなくなる。
-  async function pdfFirstPageToImageBlob(file){
-    if (!window.pdfjsLib) throw new Error("pdf.jsが読み込まれていません");
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const page = await pdf.getPage(1);
+  // PDFの指定ページをCanvasに描画し、画像(PNG)のBlobとして返す
+  async function pdfPageToImageBlob(pdf, pageNo){
+    const page = await pdf.getPage(pageNo);
     const scale = 2.2; // OCR精度を保ちつつ転送量を抑えるための拡大率（おおよそ150〜160dpi相当）
     const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
@@ -989,6 +985,35 @@
         if (blob) resolve(blob); else reject(new Error("PDFの画像変換に失敗しました"));
       }, "image/png");
     });
+  }
+  async function loadPdf(file){
+    if (!window.pdfjsLib) throw new Error("pdf.jsが読み込まれていません");
+    const arrayBuffer = await file.arrayBuffer();
+    return window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  }
+  // PDFの1ページ目だけを画像化する（通常の請求書OCR用）
+  async function pdfFirstPageToImageBlob(file){
+    const pdf = await loadPdf(file);
+    return pdfPageToImageBlob(pdf, 1);
+  }
+  // 【新規】全ページを1枚ずつ画像化してOCRにかけ、結果を連結して返す。
+  //
+  // 複数ページのPDFをそのままGoogleドライブOCRに渡すと、実行のたびに
+  // 1ページ目だけ・2ページ目だけといった具合に取りこぼしが発生する。
+  // ページ単位で個別に送ることで、全ページが確実にテキスト化される。
+  // onProgress(現在のページ, 総ページ数) で進捗を通知する。
+  async function ocrAllPagesViaGas(file, onProgress){
+    const pdf = await loadPdf(file);
+    const total = pdf.numPages;
+    const texts = [];
+    for(let p = 1; p <= total; p++){
+      if(onProgress) onProgress(p, total);
+      const blob = await pdfPageToImageBlob(pdf, p);
+      const baseName = (file.name || "invoice").replace(/\.pdf$/i, "");
+      const pageFile = new File([blob], `${baseName}_p${p}.png`, { type: "image/png" });
+      texts.push(await ocrViaGas(pageFile));
+    }
+    return { text: texts.join("\n"), pages: total };
   }
   // opts.firstPageOnly が true の場合、PDFの1ページ目だけを画像化してOCRに渡す（対応：通常の請求書OCR用）。
   // 画像化に失敗した場合は、従来どおりPDF全体をそのままOCRに渡すフォールバック動作になる。
@@ -1354,12 +1379,25 @@
     gcResultWrap.style.display = "none";
     showToast("Google OCRで読み取っています…（時間がかかる場合があります）");
     try{
-      const text = await ocrViaGas(file);
+      // 複数ページのPDFをまとめて送るとページの取りこぼしが起きるため、
+      // 1ページずつ画像化して個別にOCRし、結果を連結する
+      let text = "", pages = 1;
+      try{
+        const r = await ocrAllPagesViaGas(file, (p, total)=>{
+          showToast(`Google OCRで読み取っています…（${p}/${total}ページ）`);
+        });
+        text = r.text; pages = r.pages;
+      }catch(convErr){
+        // pdf.jsが使えない等で画像化できない場合は、従来どおりPDFをそのまま送る
+        console.warn("ページ単位のOCRに失敗したため、PDF全体を送信します：", convErr);
+        text = await ocrViaGas(file);
+      }
       gcRawText.textContent = text || "";
       if(!text || text.replace(/\s/g, "").length < 10){
         gcAddMsg(gcMsgList, "warn", "OCRで文字を読み取れませんでした。スキャン画質を確認するか、手動で処理してください。");
         return;
       }
+      if(pages > 1) gcAddMsg(gcMsgList, "ok", `${pages}ページを読み取りました。`);
       const dateC = extractDateCandidate(text);
       if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
         const y = String(dateC.y).padStart(4,"0"), mo = String(dateC.mo).padStart(2,"0");
@@ -1473,6 +1511,12 @@
     if(totalC){
       if(sum === totalC){
         gcAddMsg(gcChecksumMsg, "ok", `検算OK：部門別合計 ${sum.toLocaleString("ja-JP")}円 ＝ 請求書合計 ${totalC.toLocaleString("ja-JP")}円`);
+      } else if(totalC < sum){
+        // 抽出した「請求書合計」が明細の合計より小さい場合は、合計欄そのものの読み取りを
+        // 誤っている可能性が高い(伏字の頁を読んで車両番号を拾ってしまう等)
+        gcAddMsg(gcChecksumMsg, "danger",
+          `検算NG：部門別合計 ${sum.toLocaleString("ja-JP")}円 に対し、請求書合計として読み取った値が ${totalC.toLocaleString("ja-JP")}円 と小さすぎます。` +
+          `合計欄の読み取りを誤っている可能性が高いので、請求書の「当月のご請求額」と部門別合計を目視で照合してください。`);
       } else {
         gcAddMsg(gcChecksumMsg, "danger", `検算NG：部門別合計 ${sum.toLocaleString("ja-JP")}円 ≠ 請求書合計 ${totalC.toLocaleString("ja-JP")}円（差額 ${(sum-totalC).toLocaleString("ja-JP")}円）。金額を確認してください。`);
       }
