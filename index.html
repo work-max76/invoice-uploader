@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>請求書アップロードツール</title>
 <style>
+  /* 配色：ダスティローズ系。変数名はそのまま（navy/blueは濃淡の役割を表す名前として使用）
+     成功（緑）・警告（赤）は、検算NGや★要確認を見落とさないよう意図的に残している */
   :root{
-    --navy:#1F3864; --blue:#2E5395; --blue-light:#EAF0FA; --bg:#F4F6FA;
-    --border:#D8DEE9; --text:#28303D; --sub:#6B7688; --warn:#BF8F00; --warn-bg:#FFF7E0;
+    --navy:#6B2C45; --blue:#A8577A; --blue-light:#FBEFF4; --bg:#FAF6F7;
+    --border:#E6D5DC; --text:#3A2E33; --sub:#7A6169; --warn:#96650F; --warn-bg:#FFF6E6;
     --ok:#2E7D32; --ok-bg:#EAF6EC; --danger:#C0392B; --danger-bg:#FBEAEA;
   }
   *{box-sizing:border-box;}
@@ -48,7 +50,7 @@
     background:#fff; color:var(--navy); border:none; border-radius:6px; padding:8px 14px;
     font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap;
   }
-  .copy-btn:hover{background:#e8edf6;}
+  .copy-btn:hover{background:#F6E8EE;}
   .msg-list{margin-top:10px;}
   .msg{font-size:12.5px; padding:7px 10px; border-radius:6px; margin-bottom:6px;}
   .msg.warn{background:var(--warn-bg); color:var(--warn); border:1px solid #F0DDA0;}
@@ -68,7 +70,7 @@
   table{width:100%; border-collapse:collapse; font-size:13px; margin-top:6px;}
   th, td{border:1px solid var(--border); padding:8px 9px; text-align:left;}
   th{background:var(--blue); color:#fff; font-weight:600; font-size:12px;}
-  tr:nth-child(even) td{background:#F7F9FC;}
+  tr:nth-child(even) td{background:#FCF8FA;}
   td.fname{font-family:Consolas,Menlo,monospace; font-size:12px;}
   .del-btn{border:none; background:none; color:var(--danger); cursor:pointer; font-size:13px;}
   .empty-row td{text-align:center; color:var(--sub); padding:18px;}
@@ -89,7 +91,7 @@
   .toast.show{opacity:1;}
   .folder-status{
     display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 14px;
-    border-radius:8px; background:var(--blue-light); border:1px solid #C9D9F0;
+    border-radius:8px; background:var(--blue-light); border:1px solid #EFD9E3;
   }
   .folder-status.unset{background:var(--warn-bg); border-color:#F0DDA0;}
   .folder-status .dot{width:9px; height:9px; border-radius:50%; background:var(--ok); flex:none;}
@@ -185,7 +187,7 @@
     <p class="file-hint">OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します。自動入力された値は必ず目視で確認・修正してください。</p>
     <details style="margin-bottom:14px;">
       <summary>読み取った文字を確認する（うまく抽出できない場合の確認用・一時的に表示中）</summary>
-      <pre id="ocrRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#F7F9FC; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
+      <pre id="ocrRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#FCF8FA; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
     </details>
     <details class="site-editor">
       <summary>取引先名リストを編集する（よく使う取引先を登録）</summary>
@@ -269,7 +271,7 @@
     </div>
     <details style="margin-top:12px;">
       <summary>読み取った文字を確認する（うまく抽出できない場合の確認用）</summary>
-      <pre id="gcRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#F7F9FC; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
+      <pre id="gcRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#FCF8FA; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
     </details>
   </div>
   <footer>
@@ -1153,7 +1155,7 @@
     items.forEach(item=>{
       const box = document.createElement("div");
       box.className = "card";
-      box.style.background = "#FAFBFD";
+      box.style.background = "#FCF8FA";
       box.style.marginBottom = "12px";
       const rowId = "split_" + item.rowIndex;
       box.innerHTML = `
