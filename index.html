@@ -17,7 +17,25 @@
     margin:0; font-family:"Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo",sans-serif;
     background:var(--bg); color:var(--text); padding:24px 16px 60px;
   }
-  .wrap{max-width:960px; margin:0 auto;}
+  .wrap{max-width:1400px; margin:0 auto;}
+  /* 2番の画面：左にPDFプレビュー、右に入力欄。画面幅が足りない場合は自動的に上下に並ぶ */
+  .split2{display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap;}
+  .split2-preview{flex:1 1 480px; min-width:340px; position:sticky; top:16px;}
+  .split2-form{flex:1 1 460px; min-width:340px;}
+  @media (max-width:1100px){
+    .split2-preview{position:static;}
+  }
+  .pdfview{border:1px solid var(--border); border-radius:8px; background:#fff; overflow:hidden;}
+  .pdfview-bar{
+    display:flex; align-items:center; gap:6px; padding:6px 8px;
+    background:var(--blue-light); border-bottom:1px solid var(--border); font-size:12px; color:var(--navy);
+  }
+  .pdfview-body{
+    height:620px; overflow:auto; background:#FCF8FA;
+    display:flex; align-items:flex-start; justify-content:center; padding:10px;
+  }
+  .pdfview-body canvas{max-width:100%; height:auto; box-shadow:0 0 0 1px var(--border);}
+  .pdfview-empty{color:var(--sub); font-size:12.5px; margin:auto; text-align:center;}
   header{margin-bottom:20px;}
   h1{font-size:22px; color:var(--navy); margin:0 0 4px;}
   header p{margin:0; color:var(--sub); font-size:13px;}
@@ -138,6 +156,24 @@
   </div>
   <div class="card">
     <h2>2. 情報を入力してPDFを選択</h2>
+    <div class="split2">
+    <div class="split2-preview">
+      <div class="pdfview" id="pdfView">
+        <div class="pdfview-bar">
+          <button type="button" class="icon-btn" id="pdfPrev" title="前のページ">‹</button>
+          <span id="pdfPageLabel">- / -</span>
+          <button type="button" class="icon-btn" id="pdfNext" title="次のページ">›</button>
+          <span style="flex:1;"></span>
+          <button type="button" class="icon-btn" id="pdfZoomOut" title="縮小">−</button>
+          <button type="button" class="icon-btn" id="pdfZoomIn" title="拡大">＋</button>
+        </div>
+        <div class="pdfview-body" id="pdfViewBody">
+          <p class="pdfview-empty" id="pdfViewEmpty">PDFファイルを選択すると、ここに表示されます。</p>
+          <canvas id="pdfCanvas" style="display:none;"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="split2-form">
     <div class="row">
       <div class="field">
         <label for="issueDate">請求書発行月</label>
@@ -198,6 +234,8 @@
         <button class="btn secondary" id="clearVendors">リストを空にする</button>
       </div>
     </details>
+    </div>
+    </div>
   </div>
   <div class="card">
     <h2>3. ファイル名の確認とアップロード</h2>
@@ -593,9 +631,67 @@
     siteSelectEl.disabled = noSiteCheckEl.checked;
     updateTargetFolder().then(updatePreview);
   });
+  // ---- PDFプレビュー ----
+  // 選択したPDFを画面内に表示し、請求書を見ながら入力できるようにする。
+  // pdf.jsが読み込めていない場合は何も表示せず、入力機能には影響させない。
+  let pvPdf = null, pvPage = 1, pvScale = 1.2, pvRendering = false;
+  const pvCanvas = el("pdfCanvas"), pvEmpty = el("pdfViewEmpty"), pvLabel = el("pdfPageLabel");
+  async function pvRender(){
+    if(!pvPdf || pvRendering) return;
+    pvRendering = true;
+    try{
+      const page = await pvPdf.getPage(pvPage);
+      const viewport = page.getViewport({ scale: pvScale });
+      pvCanvas.width = Math.ceil(viewport.width);
+      pvCanvas.height = Math.ceil(viewport.height);
+      await page.render({ canvasContext: pvCanvas.getContext("2d"), viewport }).promise;
+      pvCanvas.style.display = "block";
+      pvEmpty.style.display = "none";
+      pvLabel.textContent = `${pvPage} / ${pvPdf.numPages}`;
+    }catch(e){
+      console.warn("PDFプレビューの描画に失敗しました：", e);
+    }finally{
+      pvRendering = false;
+    }
+  }
+  function pvClear(){
+    pvPdf = null; pvPage = 1;
+    pvCanvas.style.display = "none";
+    pvEmpty.style.display = "";
+    pvEmpty.textContent = "PDFファイルを選択すると、ここに表示されます。";
+    pvLabel.textContent = "- / -";
+  }
+  async function pvLoad(file){
+    if(!window.pdfjsLib){
+      pvEmpty.textContent = "この環境ではPDFのプレビューを表示できません（入力・アップロードは通常どおり行えます）。";
+      return;
+    }
+    try{
+      pvPdf = await loadPdf(file);
+      pvPage = 1;
+      await pvRender();
+    }catch(e){
+      pvClear();
+      pvEmpty.textContent = "PDFを表示できませんでした。ファイルが破損していないか確認してください。";
+    }
+  }
+  el("pdfPrev").addEventListener("click", ()=>{
+    if(pvPdf && pvPage > 1){ pvPage--; pvRender(); }
+  });
+  el("pdfNext").addEventListener("click", ()=>{
+    if(pvPdf && pvPage < pvPdf.numPages){ pvPage++; pvRender(); }
+  });
+  el("pdfZoomIn").addEventListener("click", ()=>{
+    if(pvPdf && pvScale < 3){ pvScale = Math.round((pvScale + 0.2) * 10) / 10; pvRender(); }
+  });
+  el("pdfZoomOut").addEventListener("click", ()=>{
+    if(pvPdf && pvScale > 0.6){ pvScale = Math.round((pvScale - 0.2) * 10) / 10; pvRender(); }
+  });
+
   pdfFileEl.addEventListener("change", ()=>{
     const f = pdfFileEl.files[0];
     fileHint.textContent = f ? `選択中：${f.name}（${Math.round(f.size/1024)} KB）` : "スキャンまたはダウンロードした請求書PDFを選択してください。";
+    if(f) pvLoad(f); else pvClear();
     updatePreview();
   });
   function currentFilename(){
@@ -653,6 +749,7 @@
   el("clearFormBtn").addEventListener("click", ()=>{
     vendorEl.value = ""; amountEl.value = ""; amountHintEl.textContent = "";
     pdfFileEl.value = ""; fileHint.textContent = "スキャンまたはダウンロードした請求書PDFを選択してください。";
+    pvClear();
     updatePreview();
   });
   // ---- History (log) ----
