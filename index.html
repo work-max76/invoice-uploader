@@ -327,6 +327,16 @@
     "流山駒木","柏の葉センター","柏の葉外部","野田船形","泉第2","泉第1",
     "三ツ堀","幕張","賃貸","営業","事務センター"
   ];
+  // 拠点名 → 保存先フォルダ名。フォルダ数を増やさないため、「〇〇外部」は本体の拠点と
+  // 同じフォルダへ保存する。ファイル名と仕訳の部門には拠点名がそのまま使われる。
+  // 拠点名リストのB列に記入があれば、そちらで上書きされる。
+  let SITE_FOLDERS = {
+    "本社外部": "本社",
+    "柏インター外部": "柏インター",
+    "十余二南外部": "十余二南",
+    "ロジック柏外部": "ロジック柏",
+    "柏の葉外部": "柏の葉センター"
+  };
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
   const LAST_SITE_KEY = "invoice_tool_last_site_v1";
@@ -363,7 +373,11 @@
       const json = await res.json();
       if(Array.isArray(json.sites) && json.sites.length > 0){
         DEFAULT_SITES = json.sites;
+        // 保存先フォルダの対応もシート側（拠点名リストのB列）を正とする。
+        // B列が全て空欄の場合は対応なし＝拠点名がそのままフォルダ名になる。
+        SITE_FOLDERS = (json.siteFolders && typeof json.siteFolders === "object") ? json.siteFolders : {};
         renderSiteSelect();
+        updateTargetFolder().then(updatePreview);
       }
       if(Array.isArray(json.vehicles) && json.vehicles.length > 0){
         VEHICLE_MAP = json.vehicles;
@@ -439,13 +453,20 @@
     return noSiteCheckEl.checked ? NO_SITE_LABEL : siteSelectEl.value;
   }
   // 発行月・拠点名から「年月/拠点名」のサブフォルダパスを決定する（例：2026年7月／本社）
+  // 拠点名に対する保存先フォルダ名を返す。
+  // 「本社外部」のような拠点は「本社」フォルダへまとめて保存し、フォルダ数を増やさない。
+  // 対応はSITE_FOLDERS（拠点名リストのB列で設定）に従い、未設定なら拠点名をそのまま使う。
+  function folderNameForSite(site){
+    return (SITE_FOLDERS && SITE_FOLDERS[site]) ? SITE_FOLDERS[site] : site;
+  }
   function folderPathParts(){
     const dateVal = issueDateEl.value;
     const site = stripForbidden(sanitize(currentSite()));
     if(!dateVal || !site) return null;
+    const folder = stripForbidden(sanitize(folderNameForSite(currentSite())));
     const [y, m] = dateVal.split("-");
     const monthNum = String(parseInt(m, 10));
-    return [`${y}年${monthNum}月`, site];
+    return [`${y}年${monthNum}月`, folder || site];
   }
   async function getSubfolder(root, parts, create){
     let dir = root;
