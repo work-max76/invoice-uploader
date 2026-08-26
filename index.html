@@ -337,6 +337,10 @@
     "ロジック柏外部": "ロジック柏",
     "柏の葉外部": "柏の葉センター"
   };
+  // 自社名。請求書に必ず宛先として印字されるが、請求元ではないためOCRの取引先候補から除外する。
+  // 法人格を除いた部分で照合するため、「新柏倉庫株式会社」「株式会社新柏倉庫」のどちらでも効く。
+  // ※取引先として請求書を受け取る会社は、ここに入れないこと(取引先名が読み取れなくなる)
+  const SELF_COMPANY_NAMES = ["新柏倉庫"];
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
   const LAST_SITE_KEY = "invoice_tool_last_site_v1";
@@ -1064,9 +1068,16 @@
       candidates.push({ name: m[0], index: m.index, isAddressee });
     }
     if(candidates.length === 0) return null;
+    // 自社名は請求元になり得ないため、候補から除外する。
+    // 「御中」「様」による宛先判定だけでは、間に事業所名が入る場合(新柏倉庫株式会社 柏インター
+    // 事業所 様)に検出できないため、社名そのもので判定する。
+    const isSelf = (name)=> SELF_COMPANY_NAMES.some(self =>
+      name.replace(/[\s　]/g, "").indexOf(self) !== -1);
+    const notSelf = candidates.filter(c => !isSelf(c.name));
+    let pool = notSelf.length > 0 ? notSelf : candidates;
     // 宛先(御中/様)以外の候補を優先する。他に候補がなければ宛先候補も対象にする
-    const nonAddressee = candidates.filter(c => !c.isAddressee);
-    let pool = nonAddressee.length > 0 ? nonAddressee : candidates;
+    const nonAddressee = pool.filter(c => !c.isAddressee);
+    if(nonAddressee.length > 0) pool = nonAddressee;
     // 法人格を除いた社名部分が1文字だけの候補は、OCRの読み落としである可能性が高いため除外する。
     // (例:「ENEOS株式会社特約店」の"約店"が読めず「株式会社特」になってしまうケース)
     // 他に候補が無ければ、除外せずそのまま使う。
