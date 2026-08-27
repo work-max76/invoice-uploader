@@ -1007,7 +1007,7 @@
     // 出現せず、税抜内訳(本体金額)と混同されにくいため優先度を高くしている
     const keywords = customKeywords || [
       "今回ご請求金額","今回のご請求金額","今回ご請求額","今月ご請求額","当月ご請求額","当月のご請求額",
-      "当月御請求額","当月御請求金額","合計御請求額","御請求額合計",
+      "当月御請求額","当月御請求金額","合計御請求額","御請求額合計","請求金額合計","請求合計",
       "ご請求金額","御請求金額","ご請求額合計","請求額合計","請求金額","合計金額","税込合計","お支払金額","合計"
     ];
     // 「合計」のような一般的なキーワードは、「合計御買上額(税抜)」「合計消費税額」にも
@@ -1035,9 +1035,11 @@
     // 優先1: 「ご請求金額」等の直後(50文字以内)にある数字を採用する。
     // (OCRではラベルと金額の間の余白が多数の空白文字になることがあるため、範囲を広めに取る)
     // ¥・円付きの数字を最優先し、無ければ日付でない裸の数字を採用する
+    // キーワードの後ろ何文字までを金額の探索対象にするか
+    const AMOUNT_SEARCH_RANGE = 200;
     const markedRe = /[¥￥]\s*([0-9]{1,3}(?:\s*[,.]\s*[0-9]{3})+|[0-9]{4,})|([0-9]{1,3}(?:\s*[,.]\s*[0-9]{3})+|[0-9]{4,})\s*円/g;
     for(const kw of keywordIdx){
-      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + 50);
+      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + AMOUNT_SEARCH_RANGE);
       markedRe.lastIndex = 0;
       const mm = markedRe.exec(after);
       if(mm){
@@ -1052,7 +1054,9 @@
     // 桁区切りのない数字(口座番号・電話番号等)は金額と紛らわしいので、区切りのある数字を優先する。
     const bareRe = new RegExp(numToken, "g");
     for(const kw of keywordIdx){
-      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + 50);
+      // 表が「免税分／課税分／合計」のように複数行に分かれる請求書では、
+      // 目的の総額がキーワードから離れた位置に来るため、探索範囲を広めに取る
+      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + AMOUNT_SEARCH_RANGE);
       bareRe.lastIndex = 0;
       let mm, withSep = [], plain = [];
       while((mm = bareRe.exec(after))){
@@ -1102,8 +1106,9 @@
     // 場合の両方があるため、両方のパターンにマッチさせる
     // OCRで法人格の末尾(社)が読み落とされることがあるため、「株式会」「有限会」も候補として拾う。
     // 長い表記を先に並べているので、正しく読めている場合は「株式会社」が優先される。
-    const corpRe = /(?:株式会社|有限会社|合同会社|㈱|㈲)[^\s、。\n]{1,20}|[^\s、。\n]{1,20}(?:株式会社|有限会社|合同会社|株式会|有限会|㈱|㈲)/g;
-    const candidates = [];
+    // 「株式会社　二葉」のように法人格と社名の間に空白が入る表記があるため、空白を2文字まで許容する。
+    const corpRe = /(?:株式会社|有限会社|合同会社|㈱|㈲)[\s　]{0,2}[^\s、。\n]{1,20}|[^\s、。\n]{1,20}(?:株式会社|有限会社|合同会社|株式会|有限会|㈱|㈲)/g;
+    let candidates = [];
     let m;
     while((m = corpRe.exec(text))){
       // 直後に「御中」「様」が続く社名は、請求書の宛先(＝自社)であって請求元ではないため区別する
@@ -1115,8 +1120,15 @@
     // 自社名は請求元になり得ないため、候補から除外する。
     // 「御中」「様」による宛先判定だけでは、間に事業所名が入る場合(新柏倉庫株式会社 柏インター
     // 事業所 様)に検出できないため、社名そのもので判定する。
-    const isSelf = (name)=> SELF_COMPANY_NAMES.some(self =>
-      name.replace(/[\s　]/g, "").indexOf(self) !== -1);
+    // 法人格を取り除いた社名部分。「株式会社 御中」のように宛名の語を拾ってしまった候補を弾くのに使う
+    const bareName = (name)=> name
+      .replace(/(株式会社|有限会社|合同会社|株式会|有限会|㈱|㈲)/g, "")
+      .replace(/[\s　]/g, "").trim();
+    const isSelf = (name)=> SELF_COMPANY_NAMES.some(self => bareName(name).indexOf(self) !== -1);
+    // 「御中」「様」などの宛名の語だけが残る候補は社名ではないため除外する
+    const ADDRESS_WORDS = /^(御中|様|行|係|殿|各位)$/;
+    candidates = candidates.filter(c => !ADDRESS_WORDS.test(bareName(c.name)));
+    if(candidates.length === 0) return null;
     const notSelf = candidates.filter(c => !isSelf(c.name));
     let pool = notSelf.length > 0 ? notSelf : candidates;
     // 宛先(御中/様)以外の候補を優先する。他に候補がなければ宛先候補も対象にする
@@ -1125,9 +1137,7 @@
     // 法人格を除いた社名部分が1文字だけの候補は、OCRの読み落としである可能性が高いため除外する。
     // (例:「ENEOS株式会社特約店」の"約店"が読めず「株式会社特」になってしまうケース)
     // 他に候補が無ければ、除外せずそのまま使う。
-    const enough = pool.filter(c =>
-      c.name.replace(/(株式会社|有限会社|合同会社|株式会|有限会|㈱|㈲)/g, "").trim().length >= 2
-    );
+    const enough = pool.filter(c => bareName(c.name).length >= 2);
     if(enough.length > 0) pool = enough;
     // インボイス登録番号(T+数字)の近くにある社名を請求元として優先する。
     // OCRでの桁誤読・空白混入に対応するため、桁数は11〜14桁で緩めに一致させる
@@ -1139,6 +1149,7 @@
     return pool[0].name
       .replace(/㈱/g, "株式会社").replace(/㈲/g, "有限会社")
       .replace(/株式会$/, "株式会社").replace(/有限会$/, "有限会社") // 末尾の「社」が読めなかった場合を補う
+      .replace(/[\s　]+/g, "") // 「株式会社　二葉」のような表記内の空白を詰める
       .trim();
   }
   // OCRテキストと取引先名から、勘定科目マスタの品目キーワードに一致するルールを探す。
