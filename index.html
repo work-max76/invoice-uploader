@@ -221,6 +221,7 @@
       <button class="btn secondary" id="ocrBtn">PDFから発行月・金額・取引先名を自動入力（OCR）</button>
     </div>
     <p class="file-hint">OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します。自動入力された値は必ず目視で確認・修正してください。</p>
+    <div class="msg-list" id="detectedAccountBox"></div>
     <details style="margin-bottom:14px;">
       <summary>読み取った文字を確認する（うまく抽出できない場合の確認用・一時的に表示中）</summary>
       <pre id="ocrRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#FCF8FA; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
@@ -341,6 +342,12 @@
   // 法人格を除いた部分で照合するため、「新柏倉庫株式会社」「株式会社新柏倉庫」のどちらでも効く。
   // ※取引先として請求書を受け取る会社は、ここに入れないこと(取引先名が読み取れなくなる)
   const SELF_COMPANY_NAMES = ["新柏倉庫"];
+  // 【新規】品目キーワードによる勘定科目の判定ルール(勘定科目マスタのF列)。
+  // 同じ取引先から電気料金・水道料金・保守料など種類の違う請求書が届く場合に、
+  // OCRテキストへ含まれる文言で科目を切り分ける(1枚1種類が前提)。
+  let ACCOUNT_RULES = [];
+  // OCRで判定した科目。アップロード時に「借方勘定科目指定」として記録される
+  let detectedAccount = { debit: "", subDebit: "", keyword: "", taxType: "" };
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
   const LAST_SITE_KEY = "invoice_tool_last_site_v1";
@@ -386,6 +393,7 @@
       if(Array.isArray(json.vehicles) && json.vehicles.length > 0){
         VEHICLE_MAP = json.vehicles;
       }
+      if(Array.isArray(json.accountRules)) ACCOUNT_RULES = json.accountRules;
     }catch(e){ /* 取得失敗時は組み込みの既定値を使う */ }
   }
   loadAccessIdentity().then(()=> loadPendingQueue());
@@ -715,6 +723,13 @@
     if(pvPdf && pvScale > 0.6){ pvScale = Math.round((pvScale - 0.2) * 10) / 10; pvRender(); }
   });
 
+  // 取引先名を手で入力・修正した場合も、品目判定をやり直す。
+  // OCRを実行していない場合はテキストが無いため、対象取引先なら警告だけが出る。
+  vendorEl.addEventListener("change", ()=>{
+    const raw = el("ocrRawText") ? el("ocrRawText").textContent : "";
+    detectedAccount = detectAccountByKeyword(raw || "", vendorEl.value);
+    renderDetectedAccount();
+  });
   pdfFileEl.addEventListener("change", ()=>{
     const f = pdfFileEl.files[0];
     fileHint.textContent = f ? `選択中：${f.name}（${Math.round(f.size/1024)} KB）` : "スキャンまたはダウンロードした請求書PDFを選択してください。";
@@ -776,6 +791,8 @@
   el("clearFormBtn").addEventListener("click", ()=>{
     vendorEl.value = ""; amountEl.value = ""; amountHintEl.textContent = "";
     pdfFileEl.value = ""; fileHint.textContent = "スキャンまたはダウンロードした請求書PDFを選択してください。";
+    detectedAccount = { debit: "", subDebit: "", keyword: "", taxType: "" };
+    renderDetectedAccount();
     pvClear();
     updatePreview();
   });
@@ -953,7 +970,16 @@
         ? "アップロードしました（経理へ拠点振り分けを依頼しました）：" + data.filename
         : "アップロードしました：" + parts.join(" ＞ ") + " ＞ " + data.filename);
       addHistory(
-        { time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor, amount: data.amount, filename: data.filename, method: isNoSite ? "拠点振分依頼中" : "upload", folder: parts.join("/"), submitter: data.submitter },
+        {
+          time: new Date().toISOString(), dateStr: data.dateStr, site: data.site, vendor: data.vendor,
+          amount: data.amount, filename: data.filename,
+          method: isNoSite ? "拠点振分依頼中" : "upload", folder: parts.join("/"), submitter: data.submitter,
+          // 品目キーワードで科目を判定できた場合のみ設定する。
+          // 判定できなかった場合は空欄となり、従来どおり取引先名で照合される。
+          debitAccount: detectedAccount.debit,
+          debitSubAccount: detectedAccount.subDebit,
+          debitTaxType: detectedAccount.taxType || (detectedAccount.debit ? "課税仕入 10%" : "")
+        },
         isNoSite ? "queue_allocation" : "record"
       );
       rememberVendor(data.vendor);
@@ -981,12 +1007,22 @@
     // 出現せず、税抜内訳(本体金額)と混同されにくいため優先度を高くしている
     const keywords = customKeywords || [
       "今回ご請求金額","今回のご請求金額","今回ご請求額","今月ご請求額","当月ご請求額","当月のご請求額",
+      "当月御請求額","当月御請求金額","合計御請求額","御請求額合計",
       "ご請求金額","御請求金額","ご請求額合計","請求額合計","請求金額","合計金額","税込合計","お支払金額","合計"
     ];
+    // 「合計」のような一般的なキーワードは、「合計御買上額(税抜)」「合計消費税額」にも
+    // 反応してしまう。直後がこれらの語である場合は、請求総額ではないので読み飛ばす。
+    const NOT_TOTAL_AFTER = /^[\s　]*(御?買上|買上|消費税|税額|本体|数量|個数|重量|台数)/;
     const keywordIdx = [];
     keywords.forEach(k=>{
       let idx = text.indexOf(k);
-      while(idx !== -1){ keywordIdx.push({ idx, len: k.length }); idx = text.indexOf(k, idx + 1); }
+      while(idx !== -1){
+        // 「合計御買上額」等、金額の種類を示す語が続く場合は請求総額ではないため除外する
+        if(!NOT_TOTAL_AFTER.test(text.slice(idx + k.length, idx + k.length + 8))){
+          keywordIdx.push({ idx, len: k.length });
+        }
+        idx = text.indexOf(k, idx + 1);
+      }
     });
     const numToken = "([0-9]{1,3}(?:\\s*[,.]\\s*[0-9]{3})+|[0-9]{4,})";
     // 「2026/08/31」「2026年8月31日」等の日付の一部を金額と誤認しないよう、数字の前後が
@@ -1009,16 +1045,24 @@
         if(!isNaN(num)) return num;
       }
     }
+    // 表がラベルの行と金額の行に分かれてOCRされると、キーワードの直後に本体金額・消費税額が
+    // 並び、請求総額が最後に来ることがある(例:「電気料金 消費税 今回御請求金額」→「548,007 54,800 602,807」)。
+    // そのため、桁区切りのある金額が複数見つかった場合は、その中の最大値を請求総額とみなす。
+    // 請求総額は内訳より必ず大きいため、この判断で取り違えを防げる。
+    // 桁区切りのない数字(口座番号・電話番号等)は金額と紛らわしいので、区切りのある数字を優先する。
     const bareRe = new RegExp(numToken, "g");
     for(const kw of keywordIdx){
       const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + 50);
       bareRe.lastIndex = 0;
-      let mm;
+      let mm, withSep = [], plain = [];
       while((mm = bareRe.exec(after))){
         if(isDatePart(after, mm.index, mm[0].length)) continue;
         const num = parseInt(mm[1].replace(/[\s,.]/g, ""), 10);
-        if(!isNaN(num)) return num;
+        if(isNaN(num)) continue;
+        if(/[,.]/.test(mm[1])) withSep.push(num); else plain.push(num);
       }
+      if(withSep.length > 0) return Math.max.apply(null, withSep);
+      if(plain.length > 0) return plain[0];
     }
     // 優先2: 「12,345円」形式と、「¥12,345」「￥12,345」形式を文書全体から探し、キーワードに一番近いものを採用
     const numRe = /(?:[¥￥]\s*([0-9]{1,3}(?:\s*[,.]\s*[0-9]{3})+|[0-9]{4,}))|(?:([0-9]{1,3}(?:\s*[,.]\s*[0-9]{3})+|[0-9]{4,})\s*円)/g;
@@ -1097,6 +1141,55 @@
       .replace(/株式会$/, "株式会社").replace(/有限会$/, "有限会社") // 末尾の「社」が読めなかった場合を補う
       .trim();
   }
+  // OCRテキストと取引先名から、勘定科目マスタの品目キーワードに一致するルールを探す。
+  // 見つからなければ空を返し、従来どおり取引先名での照合に任せる。
+  function detectAccountByKeyword(text, vendor){
+    if(!vendor || ACCOUNT_RULES.length === 0) return { debit: "", subDebit: "", keyword: "", taxType: "", hasRules: false };
+    const v = normalizeVendorNameJs(vendor);
+    // この取引先が品目判定の対象かどうか(対象なのに判定できなかった場合に警告するため)
+    const hasRules = ACCOUNT_RULES.some(r => r.vendor === v);
+    // 長いキーワードを優先する(「水道料金」と「料金」が両方登録されている場合の取り違えを防ぐ)
+    const rules = ACCOUNT_RULES
+      .filter(r => r.vendor === v && r.keyword && text.indexOf(r.keyword) !== -1)
+      .sort((a, b) => b.keyword.length - a.keyword.length);
+    if(rules.length === 0) return { debit: "", subDebit: "", keyword: "", taxType: "", hasRules: hasRules };
+    return { debit: rules[0].debit, subDebit: rules[0].subDebit, keyword: rules[0].keyword, taxType: rules[0].taxType || "", hasRules: true };
+  }
+  // GAS側のnormalizeVendorNameと同じ規則で、法人格と空白を取り除く
+  function normalizeVendorNameJs(name){
+    return String(name || "")
+      .replace(/(株式会社|有限会社|合同会社|㈱|㈲|（株）|\(株\)|（有）|\(有\)|（同）|\(同\))/g, "")
+      .replace(/[\s　]+/g, "").trim();
+  }
+
+  // 判定した勘定科目を画面に表示する。判定できなかった場合は何も出さない
+  // (その場合は仕訳CSV書き出し時に取引先名で照合される)
+  function renderDetectedAccount(){
+    const box = el("detectedAccountBox");
+    if(!box) return;
+    if(detectedAccount.debit){
+      box.innerHTML = "";
+      const d = document.createElement("div");
+      d.className = "msg ok";
+      d.textContent = `勘定科目：${detectedAccount.debit}`
+        + (detectedAccount.subDebit ? `（補助科目：${detectedAccount.subDebit}）` : "")
+        + (detectedAccount.taxType ? `／税区分：${detectedAccount.taxType}` : "")
+        + ` ／ 請求書の「${detectedAccount.keyword}」という記載から判定しました`;
+      box.appendChild(d);
+    } else if(detectedAccount.hasRules){
+      // 品目により科目が変わる取引先なのに判定できなかった場合(OCR未実行、または
+      // 想定外の品目)は、誤った科目のまま流れないよう警告する
+      box.innerHTML = "";
+      const d = document.createElement("div");
+      d.className = "msg warn";
+      d.textContent = "この取引先は請求内容によって勘定科目が変わります。"
+        + "OCRを実行して品目を読み取るか、経理担当者に科目の確認を依頼してください。";
+      box.appendChild(d);
+    } else {
+      box.innerHTML = "";
+    }
+  }
+
   // ---- Google OCR (experimental) ----
   // 選択したPDFをGAS経由でGoogleドライブの無料OCRに一時的に送信してテキスト化し、
   // 発行月・金額・取引先名の自動入力に使う。文字情報を持つPDF・スキャン画像PDFの両方に対応。
@@ -1243,6 +1336,9 @@
         rememberVendor(vendorC); // 読み取れた正式名称は、重複がなければ取引先名リストにも自動追加する
         filledAny = true;
       } else { missing.push("取引先名"); }
+      // 品目キーワードによる勘定科目の判定(同じ取引先で種類の違う請求書がある場合)
+      detectedAccount = detectAccountByKeyword(text, vendorC || vendorEl.value);
+      renderDetectedAccount();
       if(filledAny && missing.length === 0){
         addMsg("warn", "Google OCRで読み取った文字から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
       } else if(filledAny){
@@ -1318,6 +1414,16 @@
           d.className = "msg warn";
           d.textContent = "「拠点按分ルール」に登録された比率で自動入力しました。金額に間違いがないか確認してから確定してください。";
           msgBox.appendChild(d);
+          // 按分ルールの拠点名が拠点リストに無いと、プルダウンで選択されず別の拠点が入ってしまう。
+          // 気づかないまま確定されるのを防ぐため、その場で警告する。
+          const unknown = item.suggested.map(s=> s.site).filter(s=> s && !DEFAULT_SITES.includes(s));
+          if(unknown.length > 0){
+            const w = document.createElement("div");
+            w.className = "msg danger";
+            w.textContent = `拠点按分ルールの拠点名「${unknown.join("・")}」が拠点リストにありません。`
+              + `正しい拠点が選択されていないため、この画面で選び直すか、拠点按分ルールの拠点名を修正してください。`;
+            msgBox.appendChild(w);
+          }
         }
       } else {
         addSplitRow(item.rowIndex, item.amount); // 最初の1行を追加しておく
