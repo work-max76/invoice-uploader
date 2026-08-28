@@ -1012,16 +1012,30 @@
     ];
     // 「合計」のような一般的なキーワードは、「合計御買上額(税抜)」「合計消費税額」にも
     // 反応してしまう。直後がこれらの語である場合は、請求総額ではないので読み飛ばす。
-    const NOT_TOTAL_AFTER = /^[\s　]*(御?買上|買上|消費税|税額|本体|数量|個数|重量|台数)/;
+    // 「合計御買上額(税抜)」「今回御請求額 御請求残額」のように、直後に別の項目名が続く場合は
+    // 請求総額ではないため読み飛ばす。残額・繰越・前回分は当月の支払額ではない点に注意。
+    const NOT_TOTAL_AFTER = /^[\s　]*(御?買上|買上|消費税|税額|本体|数量|個数|重量|台数|御?請求残額|残額|繰越|前回|前月|入金)/;
+    // OCRは語の途中に空白や改行を入れることがある(「合 計」「合\n計」)。
+    // 空白を除いた文字列で照合し、見つかった位置を元のテキストの位置に戻す。
+    const stripped = { s: "", map: [] };
+    for(let i = 0; i < text.length; i++){
+      if(/[\s　]/.test(text[i])) continue;
+      stripped.s += text[i];
+      stripped.map.push(i);
+    }
     const keywordIdx = [];
     keywords.forEach(k=>{
-      let idx = text.indexOf(k);
-      while(idx !== -1){
-        // 「合計御買上額」等、金額の種類を示す語が続く場合は請求総額ではないため除外する
-        if(!NOT_TOTAL_AFTER.test(text.slice(idx + k.length, idx + k.length + 8))){
-          keywordIdx.push({ idx, len: k.length });
+      const key = k.replace(/[\s　]/g, "");
+      let si = stripped.s.indexOf(key);
+      while(si !== -1){
+        const start = stripped.map[si];
+        // 元のテキスト上での終端(次の文字の直前まで)
+        const end = stripped.map[si + key.length - 1] + 1;
+        // 「合計御買上額」「今回御請求額 御請求残額」等、別の項目名が続く場合は請求総額ではない
+        if(!NOT_TOTAL_AFTER.test(text.slice(end, end + 10).replace(/[\s　]/g, ""))){
+          keywordIdx.push({ idx: start, len: end - start });
         }
-        idx = text.indexOf(k, idx + 1);
+        si = stripped.s.indexOf(key, si + 1);
       }
     });
     const numToken = "([0-9]{1,3}(?:\\s*[,.]\\s*[0-9]{3})+|[0-9]{4,})";
