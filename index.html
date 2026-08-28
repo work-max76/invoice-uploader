@@ -348,6 +348,8 @@
   let ACCOUNT_RULES = [];
   // OCRで判定した科目。アップロード時に「借方勘定科目指定」として記録される
   let detectedAccount = { debit: "", subDebit: "", keyword: "", taxType: "" };
+  // OCRが提案した値。アップロード時に実際の入力値と比べ、読み取れたかどうかを記録する
+  let ocrSuggested = { ran: false, amount: null, vendor: "" };
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
   const LAST_SITE_KEY = "invoice_tool_last_site_v1";
@@ -734,6 +736,8 @@
     const f = pdfFileEl.files[0];
     fileHint.textContent = f ? `選択中：${f.name}（${Math.round(f.size/1024)} KB）` : "スキャンまたはダウンロードした請求書PDFを選択してください。";
     if(f) pvLoad(f); else pvClear();
+    // 別のPDFに差し替えたら、前のOCR結果は無効になる
+    ocrSuggested = { ran: false, amount: null, vendor: "" };
     updatePreview();
   });
   function currentFilename(){
@@ -792,6 +796,7 @@
     vendorEl.value = ""; amountEl.value = ""; amountHintEl.textContent = "";
     pdfFileEl.value = ""; fileHint.textContent = "スキャンまたはダウンロードした請求書PDFを選択してください。";
     detectedAccount = { debit: "", subDebit: "", keyword: "", taxType: "" };
+    ocrSuggested = { ran: false, amount: null, vendor: "" };
     renderDetectedAccount();
     pvClear();
     updatePreview();
@@ -819,7 +824,8 @@
       // 通常のアップロードでは空欄のまま送られ、これまで通り勘定科目マスタで照合される。
       debitAccount: entry.debitAccount || "",
       debitSubAccount: entry.debitSubAccount || "",
-      debitTaxType: entry.debitTaxType || ""
+      debitTaxType: entry.debitTaxType || "",
+      ocrStatus: entry.ocrStatus || ""
     };
     // text/plain にすることでプリフライト(OPTIONS)を回避（GAS側はcontentsをJSON.parseするだけなので問題ない）
     fetch(GAS_URL, {
@@ -978,7 +984,8 @@
           // 判定できなかった場合は空欄となり、従来どおり取引先名で照合される。
           debitAccount: detectedAccount.debit,
           debitSubAccount: detectedAccount.subDebit,
-          debitTaxType: detectedAccount.taxType || (detectedAccount.debit ? "課税仕入 10%" : "")
+          debitTaxType: detectedAccount.taxType || (detectedAccount.debit ? "課税仕入 10%" : ""),
+          ocrStatus: ocrStatusFor(data.amount, data.vendor)
         },
         isNoSite ? "queue_allocation" : "record"
       );
@@ -1005,6 +1012,7 @@
   function extractAmountCandidate(text, customKeywords){
     // 「今回ご請求金額」等は表中に繰り返し出る「請求金額(10%対象)」等の見出しと違い1箇所しか
     // 出現せず、税抜内訳(本体金額)と混同されにくいため優先度を高くしている
+    const isCustom = !!customKeywords;
     const keywords = customKeywords || [
       "今回ご請求金額","今回のご請求金額","今回ご請求額","今月ご請求額","当月ご請求額","当月のご請求額",
       "当月御請求額","当月御請求金額","合計御請求額","御請求額合計","請求金額合計","請求合計",
@@ -1031,8 +1039,9 @@
         const start = stripped.map[si];
         // 元のテキスト上での終端(次の文字の直前まで)
         const end = stripped.map[si + key.length - 1] + 1;
-        // 「合計御買上額」「今回御請求額 御請求残額」等、別の項目名が続く場合は請求総額ではない
-        if(!NOT_TOTAL_AFTER.test(text.slice(end, end + 10).replace(/[\s　]/g, ""))){
+        // 「合計御買上額」「今回御請求額 御請求残額」等、別の項目名が続く場合は請求総額ではない。
+        // ただし取引先ごとに明示指定されたキーワードは、利用者の意思なので除外しない。
+        if(isCustom || !NOT_TOTAL_AFTER.test(text.slice(end, end + 10).replace(/[\s　]/g, ""))){
           keywordIdx.push({ idx: start, len: end - start });
         }
         si = stripped.s.indexOf(key, si + 1);
@@ -1066,6 +1075,38 @@
     // そのため、桁区切りのある金額が複数見つかった場合は、その中の最大値を請求総額とみなす。
     // 請求総額は内訳より必ず大きいため、この判断で取り違えを防げる。
     // 桁区切りのない数字(口座番号・電話番号等)は金額と紛らわしいので、区切りのある数字を優先する。
+    // 「前回御請求額 御入金額 … 今回御請求額 御請求残額」のように項目名が横に並び、
+    // その下に金額が同じ数だけ並ぶ表では、項目名の順番と金額の順番が対応する。
+    // 明示指定されたキーワードについては、この対応を使って正しい金額を選ぶ。
+    function pickByPosition(kw){
+      const lineStart = text.lastIndexOf("\n", kw.idx) + 1;
+      let lineEnd = text.indexOf("\n", kw.idx + kw.len);
+      if(lineEnd === -1) lineEnd = text.length;
+      const labelLine = text.slice(lineStart, lineEnd);
+      const labels = labelLine.split(/[\s　]+/).filter(t => t.length > 0);
+      if(labels.length < 2) return null; // 項目名が1つだけなら並びの対応は使えない
+      // キーワードが何番目の項目かを求める(空白を除いて照合する)
+      const strip = (t)=> t.replace(/[\s　]/g, "");
+      const target = strip(text.slice(kw.idx, kw.idx + kw.len));
+      const k = labels.findIndex(t => strip(t).indexOf(target) !== -1);
+      if(k === -1) return null;
+      // 次の行に並ぶ金額を集める
+      const nextLine = text.slice(lineEnd + 1, lineEnd + 1 + AMOUNT_SEARCH_RANGE).split(/\r?\n/)[0] || "";
+      const nums = (nextLine.match(new RegExp(numToken, "g")) || [])
+        .filter(t => /[,.]/.test(t))
+        .map(t => parseInt(t.replace(/[\s,.]/g, ""), 10))
+        .filter(n => !isNaN(n));
+      // 項目名の数と金額の数が一致するときだけ、並びの対応を信頼する
+      if(nums.length !== labels.length) return null;
+      return nums[k];
+    }
+    if(isCustom){
+      for(const kw of keywordIdx){
+        const byPos = pickByPosition(kw);
+        if(byPos !== null) return byPos;
+      }
+    }
+
     const bareRe = new RegExp(numToken, "g");
     for(const kw of keywordIdx){
       // 表が「免税分／課税分／合計」のように複数行に分かれる請求書では、
@@ -1079,7 +1120,9 @@
         if(isNaN(num)) continue;
         if(/[,.]/.test(mm[1])) withSep.push(num); else plain.push(num);
       }
-      if(withSep.length > 0) return Math.max.apply(null, withSep);
+      // 明示指定のキーワードは「この語の直後の金額」という意味なので最初の1件を採る。
+      // 既定のキーワードは、本体・消費税・総額が並ぶ表を想定して最大値を採る。
+      if(withSep.length > 0) return isCustom ? withSep[0] : Math.max.apply(null, withSep);
       if(plain.length > 0) return plain[0];
     }
     // 優先2: 「12,345円」形式と、「¥12,345」「￥12,345」形式を文書全体から探し、キーワードに一番近いものを採用
@@ -1180,6 +1223,27 @@
     if(rules.length === 0) return { debit: "", subDebit: "", keyword: "", taxType: "", hasRules: hasRules };
     return { debit: rules[0].debit, subDebit: rules[0].subDebit, keyword: rules[0].keyword, taxType: rules[0].taxType || "", hasRules: true };
   }
+  // OCRの提案値と、実際に登録された値を比べて読み取り成否を判定する。
+  // 「金額NG」等で履歴を絞り込めば、金額キーワードの登録が必要な取引先が分かる。
+  function ocrStatusFor(finalAmount, finalVendor){
+    if(!ocrSuggested.ran) return "未実行";
+    const ng = [];
+    if(String(ocrSuggested.amount || "") !== String(finalAmount || "")) ng.push("金額NG");
+    if(normalizeVendorNameJs(ocrSuggested.vendor) !== normalizeVendorNameJs(finalVendor)) ng.push("取引先NG");
+    return ng.length === 0 ? "OK" : ng.join("/");
+  }
+
+  // 取引先ごとに指定された「金額キーワード」を返す(勘定科目マスタのH列)。
+  // 既定の判定で金額を読めない請求書は、ここに語を登録すればその近くの金額が使われる。
+  function amountKeywordsFor(vendor){
+    if(!vendor || ACCOUNT_RULES.length === 0) return null;
+    const v = normalizeVendorNameJs(vendor);
+    const list = ACCOUNT_RULES
+      .filter(r => r.vendor === v && r.amountKeyword)
+      .map(r => r.amountKeyword);
+    return list.length > 0 ? list : null;
+  }
+
   // GAS側のnormalizeVendorNameと同じ規則で、法人格と空白を取り除く
   function normalizeVendorNameJs(name){
     return String(name || "")
@@ -1342,8 +1406,12 @@
         return;
       }
       const dateC = extractDateCandidate(text);
-      const amountC = extractAmountCandidate(text);
       const vendorC = extractVendorCandidate(text);
+      // 取引先ごとに金額キーワードが登録されていれば、それを優先して金額を探す。
+      // 登録が無ければ、これまで通り共通の判定で探す。
+      const amountKw = amountKeywordsFor(vendorC || vendorEl.value);
+      let amountC = amountKw ? extractAmountCandidate(text, amountKw) : null;
+      if(amountC === null) amountC = extractAmountCandidate(text);
       let filledAny = false;
       const missing = [];
       if(dateC && dateC.mo >= 1 && dateC.mo <= 12){
@@ -1361,6 +1429,9 @@
         rememberVendor(vendorC); // 読み取れた正式名称は、重複がなければ取引先名リストにも自動追加する
         filledAny = true;
       } else { missing.push("取引先名"); }
+      // OCRが提案した値を控えておく。アップロード時に実際の入力値と比べ、
+      // 読み取れたかどうかを履歴へ記録する(金額キーワードの登録対象を洗い出すため)
+      ocrSuggested = { ran: true, amount: amountC, vendor: vendorC || "" };
       // 品目キーワードによる勘定科目の判定(同じ取引先で種類の違う請求書がある場合)
       detectedAccount = detectAccountByKeyword(text, vendorC || vendorEl.value);
       renderDetectedAccount();
