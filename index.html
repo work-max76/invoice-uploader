@@ -222,6 +222,7 @@
     </div>
     <p class="file-hint">OCRでPDFを読み取り、発行月・金額・取引先名を自動入力します。自動入力された値は必ず目視で確認・修正してください。</p>
     <div class="msg-list" id="detectedAccountBox"></div>
+    <div id="keywordHintBox"></div>
     <details style="margin-bottom:14px;">
       <summary>読み取った文字を確認する（うまく抽出できない場合の確認用・一時的に表示中）</summary>
       <pre id="ocrRawText" style="white-space:pre-wrap; font-size:11px; max-height:220px; overflow:auto; background:#FCF8FA; border:1px solid var(--border); border-radius:6px; padding:8px;"></pre>
@@ -349,7 +350,7 @@
   // OCRで判定した科目。アップロード時に「借方勘定科目指定」として記録される
   let detectedAccount = { debit: "", subDebit: "", keyword: "", taxType: "" };
   // OCRが提案した値。アップロード時に実際の入力値と比べ、読み取れたかどうかを記録する
-  let ocrSuggested = { ran: false, amount: null, vendor: "" };
+  let ocrSuggested = { ran: false, amount: null, vendor: "", text: "" };
   const FORBIDDEN = /[\\\/:\*\?"<>\|]/g;
   const LIST_KEY = "invoice_tool_history_v1";
   const LAST_SITE_KEY = "invoice_tool_last_site_v1";
@@ -737,7 +738,8 @@
     fileHint.textContent = f ? `選択中：${f.name}（${Math.round(f.size/1024)} KB）` : "スキャンまたはダウンロードした請求書PDFを選択してください。";
     if(f) pvLoad(f); else pvClear();
     // 別のPDFに差し替えたら、前のOCR結果は無効になる
-    ocrSuggested = { ran: false, amount: null, vendor: "" };
+    ocrSuggested = { ran: false, amount: null, vendor: "", text: "" };
+    renderKeywordHint();
     updatePreview();
   });
   function currentFilename(){
@@ -796,7 +798,7 @@
     vendorEl.value = ""; amountEl.value = ""; amountHintEl.textContent = "";
     pdfFileEl.value = ""; fileHint.textContent = "スキャンまたはダウンロードした請求書PDFを選択してください。";
     detectedAccount = { debit: "", subDebit: "", keyword: "", taxType: "" };
-    ocrSuggested = { ran: false, amount: null, vendor: "" };
+    ocrSuggested = { ran: false, amount: null, vendor: "", text: "" };
     renderDetectedAccount();
     pvClear();
     updatePreview();
@@ -825,7 +827,8 @@
       debitAccount: entry.debitAccount || "",
       debitSubAccount: entry.debitSubAccount || "",
       debitTaxType: entry.debitTaxType || "",
-      ocrStatus: entry.ocrStatus || ""
+      ocrStatus: entry.ocrStatus || "",
+      amountKeywordHint: entry.amountKeywordHint || ""
     };
     // text/plain にすることでプリフライト(OPTIONS)を回避（GAS側はcontentsをJSON.parseするだけなので問題ない）
     fetch(GAS_URL, {
@@ -985,7 +988,8 @@
           debitAccount: detectedAccount.debit,
           debitSubAccount: detectedAccount.subDebit,
           debitTaxType: detectedAccount.taxType || (detectedAccount.debit ? "課税仕入 10%" : ""),
-          ocrStatus: ocrStatusFor(data.amount, data.vendor)
+          ocrStatus: ocrStatusFor(data.amount, data.vendor),
+          amountKeywordHint: (el("keywordHintInput") ? el("keywordHintInput").value.trim() : "")
         },
         isNoSite ? "queue_allocation" : "record"
       );
@@ -1223,6 +1227,61 @@
     if(rules.length === 0) return { debit: "", subDebit: "", keyword: "", taxType: "", hasRules: hasRules };
     return { debit: rules[0].debit, subDebit: rules[0].subDebit, keyword: rules[0].keyword, taxType: rules[0].taxType || "", hasRules: true };
   }
+  // 修正後の金額がOCRテキストのどこにあるかを探し、その手前にある語を
+  // 「金額キーワード候補」として取り出す。勘定科目マスタH列への登録に使う。
+  // 例:「今回御請求額 御請求残額」「455,818 … 48,389 457,567」→「今回御請求額」
+  function suggestAmountKeyword(text, amount){
+    if(!text || !amount) return "";
+    const n = String(amount);
+    const forms = [n.replace(/\B(?=(\d{3})+(?!\d))/g, ","), n];
+    const NUM = /[0-9]{1,3}(?:[,.][\s　]?[0-9]{3})+|[0-9]+/;
+    // 語をつなげて2文字以上にする(「合 計」のように1文字ずつ分かれている場合の対策)
+    const joinTail = (tokens)=>{
+      let out = "";
+      for(let i = tokens.length - 1; i >= 0; i--){
+        const t = tokens[i].replace(/[\s　]/g, "");
+        if(!/[一-龠ぁ-んァ-ヶー]/.test(t)) break; // 数字や記号に当たったら止める
+        out = t + out;
+        if(out.length >= 2) break;
+      }
+      return out;
+    };
+    for(const f of forms){
+      // 空白が入っていても見つけられるよう、数字と数字の間の空白を許容して探す
+      const pattern = f.split("").map(c => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s　]*");
+      const m = new RegExp(pattern).exec(text);
+      if(!m) continue;
+      const pos = m.index;
+      const lineStart = text.lastIndexOf("\n", pos) + 1;
+      const sameLineBefore = text.slice(lineStart, pos);
+      // 同じ行の、金額より前にある語を優先する(「ご請求金額 88,000」の形)
+      const sameTokens = sameLineBefore.split(/[\s　]+/).filter(t => t.length > 0);
+      if(sameTokens.length > 0 && /[一-龠ぁ-んァ-ヶー]/.test(sameTokens[sameTokens.length - 1])){
+        const w = joinTail(sameTokens);
+        if(w) return w;
+      }
+      // 金額だけが並ぶ行の場合は、前の行の項目名と並び順で対応付ける
+      const prevEnd = lineStart - 1;
+      if(prevEnd <= 0) continue;
+      const prevStart = text.lastIndexOf("\n", prevEnd - 1) + 1;
+      const prevLine = text.slice(prevStart, prevEnd);
+      let lineEnd = text.indexOf("\n", pos);
+      if(lineEnd === -1) lineEnd = text.length;
+      const valueLine = text.slice(lineStart, lineEnd);
+      const nums = valueLine.match(new RegExp(NUM.source, "g")) || [];
+      const labels = prevLine.split(/[\s　]+/).filter(t => t.length > 0);
+      // 金額より前に同じ行でいくつ数字があったか＝その金額の順番
+      const k = (sameLineBefore.match(new RegExp(NUM.source, "g")) || []).length;
+      if(nums.length === labels.length && labels[k]){
+        const w = labels[k].replace(/[\s　]/g, "").match(/[一-龠ぁ-んァ-ヶー]{2,12}/);
+        if(w) return w[0];
+      }
+      const w2 = joinTail(labels);
+      if(w2) return w2;
+    }
+    return "";
+  }
+
   // OCRの提案値と、実際に登録された値を比べて読み取り成否を判定する。
   // 「金額NG」等で履歴を絞り込めば、金額キーワードの登録が必要な取引先が分かる。
   function ocrStatusFor(finalAmount, finalVendor){
@@ -1232,6 +1291,32 @@
     if(normalizeVendorNameJs(ocrSuggested.vendor) !== normalizeVendorNameJs(finalVendor)) ng.push("取引先NG");
     return ng.length === 0 ? "OK" : ng.join("/");
   }
+
+  // 金額をOCRと違う値に直した場合、覚えさせる語の候補を画面に出す。
+  // 担当者はそのまま確認するだけでよく、違っていればその場で直せる。
+  function renderKeywordHint(){
+    const box = el("keywordHintBox");
+    if(!box) return;
+    box.innerHTML = "";
+    if(!ocrSuggested.ran) return;
+    const cur = amountEl.value.replace(/[^0-9]/g, "");
+    if(!cur || String(ocrSuggested.amount || "") === cur) return; // 一致していれば何も出さない
+    const guess = suggestAmountKeyword(ocrSuggested.text, cur);
+    const wrap = document.createElement("div");
+    wrap.className = "msg warn";
+    wrap.innerHTML = "金額が自動で読み取れませんでした。この請求書で金額のすぐ前にある文字を教えてください"
+      + "（次回から自動で読み取れるようになります）。";
+    box.appendChild(wrap);
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.marginTop = "6px";
+    row.innerHTML = `<div class="field" style="min-width:220px;">
+      <input type="text" id="keywordHintInput" placeholder="例：今回御請求額" value="${guess}">
+      <div class="file-hint">自動で推測した語が入っています。違っていれば書き換えてください。</div>
+    </div>`;
+    box.appendChild(row);
+  }
+  amountEl.addEventListener("change", renderKeywordHint);
 
   // 取引先ごとに指定された「金額キーワード」を返す(勘定科目マスタのH列)。
   // 既定の判定で金額を読めない請求書は、ここに語を登録すればその近くの金額が使われる。
@@ -1431,10 +1516,11 @@
       } else { missing.push("取引先名"); }
       // OCRが提案した値を控えておく。アップロード時に実際の入力値と比べ、
       // 読み取れたかどうかを履歴へ記録する(金額キーワードの登録対象を洗い出すため)
-      ocrSuggested = { ran: true, amount: amountC, vendor: vendorC || "" };
+      ocrSuggested = { ran: true, amount: amountC, vendor: vendorC || "", text: text };
       // 品目キーワードによる勘定科目の判定(同じ取引先で種類の違う請求書がある場合)
       detectedAccount = detectAccountByKeyword(text, vendorC || vendorEl.value);
       renderDetectedAccount();
+      renderKeywordHint();
       if(filledAny && missing.length === 0){
         addMsg("warn", "Google OCRで読み取った文字から自動推定した値です。発行月・取引先名・金額の間違いがないか必ず目視確認してから保存してください。");
       } else if(filledAny){
