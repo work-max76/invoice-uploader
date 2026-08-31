@@ -217,6 +217,22 @@
         <div class="file-hint" id="fileHint">スキャンまたはダウンロードした請求書PDFを選択してください。</div>
       </div>
     </div>
+    <div class="row">
+      <div class="field">
+        <label>受領方法（電子帳簿保存法の区分）</label>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:400; cursor:pointer;">
+            <input type="radio" name="receiptType" value="電子取引" checked style="width:auto;">
+            電子取引（メール添付・Webからダウンロード）
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-weight:400; cursor:pointer;">
+            <input type="radio" name="receiptType" value="紙で受領" style="width:auto;">
+            紙で受領（郵送・手渡しをスキャン）
+          </label>
+        </div>
+        <div class="file-hint">電子取引で受け取ったものは、電子データのまま保存する必要があります。区分を後から絞り込めるよう記録します。</div>
+      </div>
+    </div>
     <div class="actions" style="margin-top:0;">
       <button class="btn secondary" id="ocrBtn">PDFから発行月・金額・取引先名を自動入力（OCR）</button>
     </div>
@@ -742,6 +758,11 @@
     renderKeywordHint();
     updatePreview();
   });
+  // 受領方法(電子取引/紙で受領)を取得する
+  function currentReceiptType(){
+    const el2 = document.querySelector('input[name="receiptType"]:checked');
+    return el2 ? el2.value : "電子取引";
+  }
   function currentFilename(){
     const dateStr = toYYMM(issueDateEl.value);
     const site = stripForbidden(sanitize(currentSite()));
@@ -828,7 +849,8 @@
       debitSubAccount: entry.debitSubAccount || "",
       debitTaxType: entry.debitTaxType || "",
       ocrStatus: entry.ocrStatus || "",
-      amountKeywordHint: entry.amountKeywordHint || ""
+      amountKeywordHint: entry.amountKeywordHint || "",
+      receiptType: entry.receiptType || ""
     };
     // text/plain にすることでプリフライト(OPTIONS)を回避（GAS側はcontentsをJSON.parseするだけなので問題ない）
     fetch(GAS_URL, {
@@ -863,6 +885,7 @@
         dateStr: e.dateStr || "", site: e.site || "", vendor: e.vendor || "",
         amount: e.amount || "", filename: e.filename || "", folder: e.folder || "",
         method: e.method || "", submitter: e.submitter || "",
+        receiptType: e.receiptType || "",
         debitAccount: e.debitAccount || "", debitSubAccount: e.debitSubAccount || "",
         debitTaxType: e.debitTaxType || ""
       }))
@@ -988,6 +1011,7 @@
           debitAccount: detectedAccount.debit,
           debitSubAccount: detectedAccount.subDebit,
           debitTaxType: detectedAccount.taxType || (detectedAccount.debit ? "課税仕入 10%" : ""),
+          receiptType: currentReceiptType(),
           ocrStatus: ocrStatusFor(data.amount, data.vendor),
           amountKeywordHint: (el("keywordHintInput") ? el("keywordHintInput").value.trim() : "")
         },
@@ -2025,6 +2049,7 @@
         time: now, dateStr, site: r.dept, vendor, amount: r.fuel,
         filename: baseFilename + "(" + r.dept + "・カード" + r.cardNo + "燃料費分)",
         folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
+        receiptType: currentReceiptType(),
         debitAccount: r.division ? `燃料費（${r.division}）` : "",
         debitSubAccount: r.cardNo,
         debitTaxType: "課税仕入 10%"
@@ -2046,6 +2071,7 @@
         time: now, dateStr, site: t.dept, vendor, amount: t.amount,
         filename: baseFilename + "(" + t.dept + "・軽油税分)",
         folder: parts.join("/"), method: "ガソリンカード仕訳", submitter: submitter,
+        receiptType: currentReceiptType(),
         debitAccount: t.division ? `租税公課（${t.division}）` : "",
         debitSubAccount: "軽油税",
         debitTaxType: "対象外"
