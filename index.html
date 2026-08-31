@@ -1148,9 +1148,9 @@
         if(isNaN(num)) continue;
         if(/[,.]/.test(mm[1])) withSep.push(num); else plain.push(num);
       }
-      // 明示指定のキーワードは「この語の直後の金額」という意味なので最初の1件を採る。
-      // 既定のキーワードは、本体・消費税・総額が並ぶ表を想定して最大値を採る。
-      if(withSep.length > 0) return isCustom ? withSep[0] : Math.max.apply(null, withSep);
+      // 本体・消費税・総額が並ぶ表を想定し、最大値を請求総額とみなす。
+      // 項目名と金額の数が一致する表では、その前の段階(pickByPosition)で並び順により選ばれている。
+      if(withSep.length > 0) return Math.max.apply(null, withSep);
       if(plain.length > 0) return plain[0];
     }
     // 優先2: 「12,345円」形式と、「¥12,345」「￥12,345」形式を文書全体から探し、キーワードに一番近いものを採用
@@ -1520,6 +1520,7 @@
       // 登録が無ければ、これまで通り共通の判定で探す。
       const amountKw = amountKeywordsFor(vendorC || vendorEl.value);
       let amountC = amountKw ? extractAmountCandidate(text, amountKw) : null;
+      const kwWorked = (amountC !== null);
       if(amountC === null) amountC = extractAmountCandidate(text);
       let filledAny = false;
       const missing = [];
@@ -1541,6 +1542,14 @@
       // OCRが提案した値を控えておく。アップロード時に実際の入力値と比べ、
       // 読み取れたかどうかを履歴へ記録する(金額キーワードの登録対象を洗い出すため)
       ocrSuggested = { ran: true, amount: amountC, vendor: vendorC || "", text: text };
+      // 登録した金額キーワードが効いているかを画面で確認できるようにする。
+      // 「登録したのに読めない」ときに、登録が届いていないのか語が合っていないのかを切り分けられる。
+      if(amountKw){
+        addMsg(kwWorked ? "ok" : "warn",
+          kwWorked
+            ? `金額キーワード「${amountKw.join("・")}」で読み取りました。`
+            : `登録された金額キーワード「${amountKw.join("・")}」では金額を見つけられませんでした。読み取った文字に含まれているか確認してください。`);
+      }
       // 品目キーワードによる勘定科目の判定(同じ取引先で種類の違う請求書がある場合)
       detectedAccount = detectAccountByKeyword(text, vendorC || vendorEl.value);
       renderDetectedAccount();
