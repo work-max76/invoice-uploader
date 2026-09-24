@@ -124,6 +124,14 @@
     background:var(--danger-bg); border:1px solid #EFC6C2; color:var(--danger);
     padding:12px 14px; border-radius:8px; font-size:12.5px; margin-bottom:14px;
   }
+  /* メンテナンス中の案内。MAINTENANCE.on を true にすると表示され、操作もできなくなる */
+  .maintenance-banner{
+    background:var(--warn-bg); border:2px solid var(--warn); color:var(--warn);
+    padding:16px 18px; border-radius:8px; font-size:13.5px; margin-bottom:18px; line-height:1.8;
+  }
+  .maintenance-title{ font-size:16px; font-weight:700; margin-bottom:6px; }
+  /* メンテナンス中は操作欄を薄く表示し、クリックを受け付けない */
+  .maintenance-off{ opacity:.45; pointer-events:none; filter:grayscale(.35); }
   .file-hint{font-size:11.5px; color:var(--sub); margin-top:4px;}
 </style>
 <!-- PDFの1ページ目だけを画像化してOCRに渡すためのライブラリ（読み込みに失敗してもPDF全体OCRにフォールバックするため必須ではない） -->
@@ -138,6 +146,10 @@
   <div id="unsupportedBanner" class="unsupported-banner" style="display:none;">
     お使いのブラウザは共有フォルダへの自動保存に対応していません。Google Chrome または Microsoft Edge で開いてください。
   </div>
+  <div id="maintenanceBanner" class="maintenance-banner" style="display:none;">
+    <div class="maintenance-title">ただいまメンテナンス中です</div>
+    <div id="maintenanceMessage"></div>
+  </div>
   <div class="card">
     <h2>1. 共有フォルダの設定</h2>
     <div class="folder-status unset" id="folderStatus">
@@ -148,7 +160,7 @@
       <button class="btn" id="chooseFolderBtn">共有フォルダ（ルート）を選択</button>
       <button class="btn secondary" id="rescanBtn">保存先フォルダを再確認</button>
     </div>
-    <p class="file-hint">選択したフォルダの中に「年月／拠点名」のサブフォルダを自動作成し、その中に保存します（例：選択フォルダ ＞ 2026年7月 ＞ 本社 ＞ ファイル）。フォルダは請求書発行月と選んだ拠点名から自動判定されます。次回以降は選択したルートフォルダが自動で読み込まれます。フォルダのパス自体はブラウザの仕様上表示されません。</p>
+    <p class="file-hint">選択したフォルダの中の「拠点名 ＞ 年月」のフォルダへ保存します（例：選択フォルダ ＞ 本社 ＞ 2026年7月 ＞ ファイル）。保存先は請求書発行月と選んだ拠点名から自動判定されます。拠点名のフォルダは閲覧権限が設定されているため、ツールでは作成しません。見つからない場合は経理までご連絡ください。次回以降は選択したルートフォルダが自動で読み込まれます。フォルダのパス自体はブラウザの仕様上表示されません。</p>
     <div class="folder-status" id="targetFolderStatus" style="margin-top:10px; display:none;">
       <span class="dot"></span>
       <span id="targetFolderText"></span>
@@ -337,6 +349,19 @@
 <div class="toast" id="toast"></div>
 <script>
 (function(){
+  // ===== メンテナンス設定 ==========================================
+  // 共有フォルダの入れ替えなど、アップロードを止めたいときに使う。
+  //   on      … true にすると画面に案内が出て、操作できなくなる
+  //   message … 画面に表示する文章。再開予定などを書く
+  // 作業が終わったら on を false に戻すこと。
+  const MAINTENANCE = {
+    on: false,
+    message: "共有フォルダの設定作業のため、一時的に停止しています。<br>" +
+             "9月○日（○）○時ごろ再開予定です。<br>" +
+             "この間に届いた請求書は、再開後にまとめてアップロードしてください。"
+  };
+  // =================================================================
+
   // 拠点名リストと車両対応表は、営業車管理スプレッドシートから起動時に読み込んで置き換える。
   // 読み込めなかった場合(GAS未設定・通信エラー等)は、下記の組み込みリストがそのまま使われる。
   let DEFAULT_SITES = [
@@ -418,6 +443,20 @@
   loadAccessIdentity().then(()=> loadPendingQueue());
   loadMasters();
   const el = (id) => document.getElementById(id);
+
+  // メンテナンス中は案内を出し、1〜4のカードをすべて操作できない状態にする。
+  // 表示を薄くしたうえでクリックも受け付けないため、誤操作でアップロードされることはない。
+  function applyMaintenance(){
+    if(!MAINTENANCE.on) return;
+    const banner = el("maintenanceBanner");
+    if(banner){
+      el("maintenanceMessage").innerHTML = MAINTENANCE.message;
+      banner.style.display = "block";
+    }
+    document.querySelectorAll(".card").forEach(c => c.classList.add("maintenance-off"));
+    document.title = "【メンテナンス中】請求書アップロードツール";
+  }
+  applyMaintenance();
   const issueDateEl = el("issueDate"), siteSelectEl = el("siteSelect"), vendorEl = el("vendor"),
         submitterNameEl = el("submitterName"),
         amountEl = el("amount"), amountHintEl = el("amountHint"),
@@ -483,7 +522,10 @@
   function currentSite(){
     return noSiteCheckEl.checked ? NO_SITE_LABEL : siteSelectEl.value;
   }
-  // 発行月・拠点名から「年月/拠点名」のサブフォルダパスを決定する（例：2026年7月／本社）
+  // 発行月・拠点名から「拠点名/年月」のサブフォルダパスを決定する（例：本社／2026年7月）
+  // 拠点フォルダを上位に置いているのは、フォルダごとに閲覧権限を設定しているため。
+  // 拠点フォルダに一度権限を設定すれば、その下に作られる年月フォルダへ引き継がれる。
+  // ※この順番を入れ替えると権限設定が効かなくなるため、変更しないこと。
   // 拠点名に対する保存先フォルダ名を返す。
   // 「本社外部」のような拠点は「本社」フォルダへまとめて保存し、フォルダ数を増やさない。
   // 対応はSITE_FOLDERS（拠点名リストのB列で設定）に従い、未設定なら拠点名をそのまま使う。
@@ -497,12 +539,31 @@
     const folder = stripForbidden(sanitize(folderNameForSite(currentSite())));
     const [y, m] = dateVal.split("-");
     const monthNum = String(parseInt(m, 10));
-    return [`${y}年${monthNum}月`, folder || site];
+    return [folder || site, `${y}年${monthNum}月`];
   }
   async function getSubfolder(root, parts, create){
     let dir = root;
     for(const part of parts){
       dir = await dir.getDirectoryHandle(part, { create });
+    }
+    return dir;
+  }
+  // アップロード時の保存先を取得する。
+  // 拠点フォルダ(1階層目)は、フォルダごとに閲覧権限を設定しているため、ツールでは作成しない。
+  // 勝手に作ると権限の設定されていないフォルダができ、他拠点から見えてしまうため。
+  // 年月フォルダ(2階層目)は拠点フォルダの権限を引き継ぐので、無ければ自動作成する。
+  async function getUploadDir(root, parts){
+    let dir;
+    try{
+      dir = await root.getDirectoryHandle(parts[0], { create: false });
+    }catch(e){
+      throw new Error(
+        `保存先フォルダ「${parts[0]}」が共有フォルダの中に見つかりません。` +
+        `共有フォルダの選択が正しいかご確認のうえ、解決しない場合は経理までご連絡ください。`
+      );
+    }
+    for(let i = 1; i < parts.length; i++){
+      dir = await dir.getDirectoryHandle(parts[i], { create: true });
     }
     return dir;
   }
@@ -529,8 +590,16 @@
       }
       setTargetFolderStatus("保存先：" + pathLabel + "（既存 " + existingNames.size + " 件）", true);
     }catch(e){
-      // フォルダがまだ存在しない場合はアップロード時に新規作成する
-      setTargetFolderStatus("保存先：" + pathLabel + "（新規作成されます）", true);
+      // 拠点フォルダはあらかじめ作成されている前提だが、年月フォルダは初回だけ存在しない。
+      // 拠点フォルダ自体が無い場合は、その時点で分かるよう表示を分ける。
+      let siteExists = true;
+      try{ await folderHandle.getDirectoryHandle(parts[0], { create: false }); }
+      catch(e2){ siteExists = false; }
+      if(siteExists){
+        setTargetFolderStatus("保存先：" + pathLabel + "（年月フォルダは保存時に作成されます）", true);
+      }else{
+        setTargetFolderStatus("保存先フォルダ「" + parts[0] + "」が見つかりません。経理までご連絡ください。", false);
+      }
     }
   }
   el("chooseFolderBtn").addEventListener("click", async ()=>{
@@ -539,7 +608,7 @@
       const handle = await window.showDirectoryPicker();
       folderHandle = handle;
       await idbSet("shareFolder", handle);
-      setFolderStatus("連携フォルダ：" + handle.name + "（この中に年度／月／拠点名のサブフォルダを作成します）", true);
+      setFolderStatus("連携フォルダ：" + handle.name + "（この中の拠点名フォルダ ＞ 年月フォルダへ保存します）", true);
       showToast("共有フォルダを設定しました");
       await updateTargetFolder();
       updatePreview();
@@ -553,7 +622,7 @@
     // （ページ読み込み時の自動チェックだけでは、ブラウザの仕様上アクセス許可を再取得できないため）
     const ok = await verifyPermission(folderHandle, "read");
     if(ok){
-      setFolderStatus("連携フォルダ：" + folderHandle.name + "（この中に年度／月／拠点名のサブフォルダを作成します）", true);
+      setFolderStatus("連携フォルダ：" + folderHandle.name + "（この中の拠点名フォルダ ＞ 年月フォルダへ保存します）", true);
     } else {
       setFolderStatus("連携フォルダ：" + folderHandle.name + "（アクセス許可待ち。もう一度「保存先フォルダを再確認」を押してください）", false);
     }
@@ -572,7 +641,7 @@
         // そのため現在の許可状況の確認（queryPermission）のみ行う。
         const granted = (await handle.queryPermission({ mode: "read" })) === "granted";
         if(granted){
-          setFolderStatus("連携フォルダ：" + handle.name + "（この中に年度／月／拠点名のサブフォルダを作成します）", true);
+          setFolderStatus("連携フォルダ：" + handle.name + "（この中の拠点名フォルダ ＞ 年月フォルダへ保存します）", true);
           await updateTargetFolder();
         } else {
           setFolderStatus("連携フォルダ：" + handle.name + "（アクセス許可待ち。「保存先フォルダを再確認」を押してください）", false);
@@ -970,6 +1039,8 @@
   });
   // ---- Upload / Download actions ----
   uploadBtn.addEventListener("click", async ()=>{
+    // 画面側でも操作を止めているが、念のためここでも確認する
+    if(MAINTENANCE.on){ showToast("ただいまメンテナンス中です"); return; }
     const data = currentFilename();
     if(!data.filled){ showToast("入力が不足しています"); return; }
     const file = pdfFileEl.files[0];
@@ -981,9 +1052,10 @@
     if(!ok){ showToast("フォルダへの書き込み許可が必要です"); return; }
     let subDir;
     try{
-      subDir = await getSubfolder(folderHandle, parts, true); // 年度/月/拠点名フォルダを必要に応じて作成
+      subDir = await getUploadDir(folderHandle, parts); // 拠点フォルダは作成せず、年月フォルダのみ作成する
     }catch(e){
-      showToast("保存先フォルダの作成に失敗しました：" + e.message);
+      addMsg("warn", e.message);
+      showToast("保存先フォルダが見つかりません");
       return;
     }
     if(existingNames.has(data.filename)){
@@ -2031,14 +2103,14 @@
     const baseFilename = stripForbidden(`${dateStr}_ガソリンカード_${vendor}_${totalAmount}.pdf`);
     const [y, m] = gcIssueDateEl.value.split("-");
     const monthNum = String(parseInt(m, 10));
-    const parts = [`${y}年${monthNum}月`, "ガソリンカード"];
+    const parts = ["ガソリンカード", `${y}年${monthNum}月`];   // 拠点＞年月の順(権限設定のため)
     const ok = await verifyPermission(folderHandle, "readwrite");
     if(!ok){ showToast("フォルダへの書き込み許可が必要です"); return; }
     let subDir;
     try{
-      subDir = await getSubfolder(folderHandle, parts, true);
+      subDir = await getUploadDir(folderHandle, parts);
     }catch(e){
-      showToast("保存先フォルダの作成に失敗しました：" + e.message);
+      showToast(e.message);
       return;
     }
     try{
