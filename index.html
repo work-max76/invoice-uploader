@@ -176,13 +176,13 @@
     <h2>1. 共有フォルダの設定</h2>
     <div class="folder-status unset" id="folderStatus">
       <span class="dot"></span>
-      <span id="folderStatusText">共有フォルダが未設定です。下のボタンから、会社の共有クラウドがPC上で見えているフォルダ（請求書の保存先ルートフォルダ）を選択してください。</span>
+      <span id="folderStatusText">要設定　共有フォルダが未設定です。下のボタンから、請求書の保存先ルートフォルダ（01.請求書アップ）を選択してください。</span>
     </div>
     <div class="actions">
       <button class="btn" id="chooseFolderBtn">共有フォルダ（ルート）を選択</button>
       <button class="btn secondary" id="rescanBtn">保存先フォルダを再確認</button>
     </div>
-    <p class="file-hint">選択したフォルダの中の「拠点名 ＞ 年月」のフォルダへ保存します（例：選択フォルダ ＞ 本社 ＞ 2026年7月 ＞ ファイル）。保存先は請求書発行月と選んだ拠点名から自動判定されます。拠点名のフォルダは閲覧権限が設定されているため、ツールでは作成しません。見つからない場合は経理までご連絡ください。次回以降は選択したルートフォルダが自動で読み込まれます。フォルダのパス自体はブラウザの仕様上表示されません。</p>
+    <p class="file-hint">設定は最初の1回だけです。保存先は請求書発行月と拠点名から自動で決まります。</p>
     <div class="folder-status" id="targetFolderStatus" style="margin-top:10px; display:none;">
       <span class="dot"></span>
       <span id="targetFolderText"></span>
@@ -535,8 +535,10 @@
     }catch(e){}
     return false;
   }
+  // 色だけでは判断しづらいため、状態を言葉でも示す。
+  // 緑＝このまま使える／オレンジ＝設定か再確認が必要。
   function setFolderStatus(text, ok){
-    folderStatusText.textContent = text;
+    folderStatusText.textContent = (ok ? "設定OK　" : "要設定　") + text;
     folderStatus.classList.toggle("unset", !ok);
   }
   // 拠点名なしチェック時は特別な拠点名（NO_SITE_LABEL）を使う。
@@ -630,7 +632,7 @@
       const handle = await window.showDirectoryPicker();
       folderHandle = handle;
       await idbSet("shareFolder", handle);
-      setFolderStatus("連携フォルダ：" + handle.name + "（この中の拠点名フォルダ ＞ 年月フォルダへ保存します）", true);
+      setFolderStatus("連携フォルダ：" + handle.name + "　このまま使えます", true);
       showToast("共有フォルダを設定しました");
       await updateTargetFolder();
       updatePreview();
@@ -644,7 +646,7 @@
     // （ページ読み込み時の自動チェックだけでは、ブラウザの仕様上アクセス許可を再取得できないため）
     const ok = await verifyPermission(folderHandle, "read");
     if(ok){
-      setFolderStatus("連携フォルダ：" + folderHandle.name + "（この中の拠点名フォルダ ＞ 年月フォルダへ保存します）", true);
+      setFolderStatus("連携フォルダ：" + folderHandle.name + "　このまま使えます", true);
     } else {
       setFolderStatus("連携フォルダ：" + folderHandle.name + "（アクセス許可待ち。もう一度「保存先フォルダを再確認」を押してください）", false);
     }
@@ -663,7 +665,7 @@
         // そのため現在の許可状況の確認（queryPermission）のみ行う。
         const granted = (await handle.queryPermission({ mode: "read" })) === "granted";
         if(granted){
-          setFolderStatus("連携フォルダ：" + handle.name + "（この中の拠点名フォルダ ＞ 年月フォルダへ保存します）", true);
+          setFolderStatus("連携フォルダ：" + handle.name + "　このまま使えます", true);
           await updateTargetFolder();
         } else {
           setFolderStatus("連携フォルダ：" + handle.name + "（アクセス許可待ち。「保存先フォルダを再確認」を押してください）", false);
