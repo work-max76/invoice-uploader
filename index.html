@@ -124,6 +124,28 @@
     background:var(--danger-bg); border:1px solid #EFC6C2; color:var(--danger);
     padding:12px 14px; border-radius:8px; font-size:12.5px; margin-bottom:14px;
   }
+  /* 次に操作する箇所をゆっくり光らせて示す。常に1か所だけに付く。
+     点滅は目が疲れるため、やわらかく脈打つ表現にしている。 */
+  @keyframes nextStepPulse{
+    0%,100%{ box-shadow:0 0 0 0 rgba(168,87,122,.55); }
+    50%    { box-shadow:0 0 0 8px rgba(168,87,122,0); }
+  }
+  .next-step{
+    animation:nextStepPulse 1.8s ease-in-out infinite;
+    border-radius:8px; position:relative;
+  }
+  .next-step::after{
+    content:"次はこちら"; position:absolute; top:-10px; right:-6px;
+    background:var(--blue); color:#fff; font-size:10.5px; font-weight:700;
+    padding:2px 7px; border-radius:10px; white-space:nowrap; pointer-events:none;
+    box-shadow:0 1px 3px rgba(0,0,0,.2);
+  }
+  /* ファイル選択欄は枠で囲んで示す（ボタンではないため） */
+  .next-step-box{ padding:8px; background:var(--blue-light); }
+  /* 動きを抑える設定にしている利用者には、光らせず枠線だけで示す */
+  @media (prefers-reduced-motion: reduce){
+    .next-step{ animation:none; outline:2px solid var(--blue); outline-offset:2px; }
+  }
   /* メンテナンス中の案内。MAINTENANCE.on を true にすると表示され、操作もできなくなる */
   .maintenance-banner{
     background:var(--warn-bg); border:2px solid var(--warn); color:var(--warn);
@@ -223,7 +245,7 @@
       </div>
     </div>
     <div class="row">
-      <div class="field" style="flex:2; min-width:280px;">
+      <div class="field" style="flex:2; min-width:280px;" id="pdfFileField">
         <label for="pdfFile">請求書PDFファイル</label>
         <input type="file" id="pdfFile" accept="application/pdf,.pdf">
         <div class="file-hint" id="fileHint">スキャンまたはダウンロードした請求書PDFを選択してください。</div>
@@ -842,10 +864,41 @@
     const filename = filled ? `${dateStr}_${site}_${vendor}_${amount}.pdf` : null;
     return {dateStr, site, vendor, amount, submitter, filled, filename};
   }
+  // 次に操作する箇所を1か所だけ光らせる。
+  // 「フォルダを選んだ後、次に何を押せばよいか分からない」という声があったため、
+  // 作業の順番に沿って案内を移動させる。
+  function updateNextStep(){
+    const targets = ["chooseFolderBtn", "pdfFileField", "ocrBtn", "uploadBtn"];
+    targets.forEach(id => {
+      const t = el(id);
+      if(t){ t.classList.remove("next-step", "next-step-box"); }
+    });
+    if(MAINTENANCE.on) return;          // メンテナンス中は案内しない
+    if(!supportsFS) return;             // 非対応ブラウザでは案内しても操作できない
+
+    let nextId = null;
+    const hasFile = pdfFileEl.files && pdfFileEl.files.length > 0;
+    if(!folderHandle){
+      nextId = "chooseFolderBtn";                      // まず共有フォルダを設定する
+    }else if(!hasFile){
+      nextId = "pdfFileField";                         // 次にPDFを選ぶ
+    }else if(!ocrSuggested.ran){
+      nextId = "ocrBtn";                               // PDFを選んだらOCRを押す
+    }else if(currentFilename().filled){
+      nextId = "uploadBtn";                            // 入力が揃ったらアップロード
+    }
+    if(!nextId) return;                                // 入力の途中は案内しない(入力欄を邪魔しないため)
+    const target = el(nextId);
+    if(!target) return;
+    target.classList.add("next-step");
+    if(nextId === "pdfFileField") target.classList.add("next-step-box");
+  }
+
   function updatePreview(){
     const data = currentFilename();
     msgList.innerHTML = "";
     const hasFile = pdfFileEl.files && pdfFileEl.files.length > 0;
+    updateNextStep();
     // ボタンはどんな状態でも常にクリックできるようにし（disabled属性は使わない）、
     // 不足があればクリック時にその場で理由を案内する。ここでは見た目のヒントのみ変える。
     uploadBtn.classList.toggle("btn-dim", !(data.filled && hasFile && supportsFS && folderHandle));
@@ -1588,10 +1641,23 @@
     btn.disabled = true;
     showToast("Google OCRで読み取っています…（時間がかかる場合があります）");
     try{
-      const text = await ocrViaGas(file, { firstPageOnly: true });
+      let text = await ocrViaGas(file, { firstPageOnly: true });
+      // フォントの作りが特殊なPDFでは、画像に変換した時点で文字がほとんど消えてしまう
+      // （罫線だけが残り、数文字しか読めない状態になる）。
+      // その場合は画像化せず、PDFをそのままGoogleへ送って読み取れないか試す。
+      if(text.replace(/\s/g, "").length < OCR_MIN_CHARS){
+        showToast("読み取れた文字が少ないため、別の方法で再試行しています…");
+        try{
+          const direct = await ocrViaGas(file);   // 画像化せずPDFのまま送る
+          if(direct.replace(/\s/g, "").length > text.replace(/\s/g, "").length) text = direct;
+        }catch(e){ /* 再試行に失敗した場合は最初の結果のまま続行する */ }
+      }
       el("ocrRawText").textContent = text || "";
       if(!text || text.replace(/\s/g, "").length < 10){
-        addMsg("warn", "OCRでも文字を読み取れませんでした。手動で入力してください。");
+        addMsg("warn",
+          "このPDFからは文字を読み取れませんでした。発行月・取引先名・金額を手で入力してください。" +
+          "PDFの作り方によっては読み取れないものがあります（画面のプレビューに文字が表示されず、" +
+          "枠線だけが見えている場合はこれに当たります）。アップロード自体は問題なく行えます。");
         return;
       }
       const dateC = extractDateCandidate(text);
