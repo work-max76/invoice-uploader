@@ -1207,11 +1207,16 @@
       }
     }
 
+    // 明示指定されたキーワードは「この項目の金額」という意味なので、探索範囲を狭く取る。
+    // ガソリンカードのように、項目名が詰まって並び、前の行の金額(入金額など)が
+    // キーワードの後ろへ回り込む請求書があるため、離れた数値を拾わないようにする。
+    const CUSTOM_SEARCH_RANGE = 60;
+    const range = isCustom ? CUSTOM_SEARCH_RANGE : AMOUNT_SEARCH_RANGE;
     const bareRe = new RegExp(numToken, "g");
     for(const kw of keywordIdx){
       // 表が「免税分／課税分／合計」のように複数行に分かれる請求書では、
       // 目的の総額がキーワードから離れた位置に来るため、探索範囲を広めに取る
-      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + AMOUNT_SEARCH_RANGE);
+      const after = text.slice(kw.idx + kw.len, kw.idx + kw.len + range);
       bareRe.lastIndex = 0;
       let mm, withSep = [], plain = [];
       while((mm = bareRe.exec(after))){
@@ -1220,9 +1225,12 @@
         if(isNaN(num)) continue;
         if(/[,.]/.test(mm[1])) withSep.push(num); else plain.push(num);
       }
-      // 本体・消費税・総額が並ぶ表を想定し、最大値を請求総額とみなす。
-      // 項目名と金額の数が一致する表では、その前の段階(pickByPosition)で並び順により選ばれている。
-      if(withSep.length > 0) return Math.max.apply(null, withSep);
+      // 明示指定のキーワードは、項目名が並んだ後に金額が並ぶ形が多く、
+      // 目的の金額(総額)はその並びの最後に来る。最大値だと入金額等を拾うことがある。
+      // 既定のキーワードは、本体・消費税・総額が並ぶ表を想定して最大値を採る。
+      if(withSep.length > 0){
+        return isCustom ? withSep[withSep.length - 1] : Math.max.apply(null, withSep);
+      }
       if(plain.length > 0) return plain[0];
     }
     // 優先2: 「12,345円」形式と、「¥12,345」「￥12,345」形式を文書全体から探し、キーワードに一番近いものを採用
