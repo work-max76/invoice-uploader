@@ -176,13 +176,12 @@
     <h2>1. 共有フォルダの設定</h2>
     <div class="folder-status unset" id="folderStatus">
       <span class="dot"></span>
-      <span id="folderStatusText">要設定　共有フォルダが未設定です。下のボタンから、請求書の保存先ルートフォルダ（01.請求書アップ）を選択してください。</span>
+      <span id="folderStatusText">要設定　→「共有フォルダ（ルート）を選択」を押して、01.請求書アップ を選んでください</span>
     </div>
     <div class="actions">
       <button class="btn" id="chooseFolderBtn">共有フォルダ（ルート）を選択</button>
       <button class="btn secondary" id="rescanBtn">保存先フォルダを再確認</button>
     </div>
-    <p class="file-hint">設定は最初の1回だけです。保存先は請求書発行月と拠点名から自動で決まります。</p>
     <div class="folder-status" id="targetFolderStatus" style="margin-top:10px; display:none;">
       <span class="dot"></span>
       <span id="targetFolderText"></span>
@@ -632,7 +631,7 @@
       const handle = await window.showDirectoryPicker();
       folderHandle = handle;
       await idbSet("shareFolder", handle);
-      setFolderStatus("連携フォルダ：" + handle.name + "　このまま使えます", true);
+      setFolderStatus("連携フォルダ：" + handle.name + "", true);
       showToast("共有フォルダを設定しました");
       await updateTargetFolder();
       updatePreview();
@@ -646,9 +645,9 @@
     // （ページ読み込み時の自動チェックだけでは、ブラウザの仕様上アクセス許可を再取得できないため）
     const ok = await verifyPermission(folderHandle, "read");
     if(ok){
-      setFolderStatus("連携フォルダ：" + folderHandle.name + "　このまま使えます", true);
+      setFolderStatus("連携フォルダ：" + folderHandle.name + "", true);
     } else {
-      setFolderStatus("連携フォルダ：" + folderHandle.name + "（アクセス許可待ち。もう一度「保存先フォルダを再確認」を押してください）", false);
+      setFolderStatus("連携フォルダ：" + folderHandle.name + "　→「保存先フォルダを再確認」を押してください", false);
     }
     await updateTargetFolder();
     showToast(ok ? ("保存先フォルダを再読込しました（" + existingNames.size + "件のファイル）") : "アクセスが許可されませんでした");
@@ -665,10 +664,10 @@
         // そのため現在の許可状況の確認（queryPermission）のみ行う。
         const granted = (await handle.queryPermission({ mode: "read" })) === "granted";
         if(granted){
-          setFolderStatus("連携フォルダ：" + handle.name + "　このまま使えます", true);
+          setFolderStatus("連携フォルダ：" + handle.name + "", true);
           await updateTargetFolder();
         } else {
-          setFolderStatus("連携フォルダ：" + handle.name + "（アクセス許可待ち。「保存先フォルダを再確認」を押してください）", false);
+          setFolderStatus("連携フォルダ：" + handle.name + "　→「保存先フォルダを再確認」を押してください", false);
         }
       }
     }catch(e){ /* no handle stored yet */ }
