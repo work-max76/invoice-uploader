@@ -2015,12 +2015,26 @@
       markers.push({ cardNo: parseInt(m[1], 10), start: m.index, end: m.index + m[0].length });
     }
     const groups = [];
-    markers.forEach((mk, i)=>{
+    // 軽油税は、前のカードの合計金額の直後から、このカードの合計金額までの間にあるものを対象にする。
+    // OCRの並びによって軽油税がマーカーの前に来たり後ろに来たりするため、
+    // マーカーではなく「合計金額の位置」で区切ることで、どちらの並びでも正しいカードに割り当てられる。
+    let prevAmountEnd = 0;
+    for(let i = 0; i < markers.length; i++){
+      const mk = markers[i];
       // 合計金額:このマーカーの直後から、次のマーカーの手前までを探す
       const searchEnd = (i + 1 < markers.length) ? markers[i + 1].start : text.length;
       const after = text.slice(mk.end, searchEnd);
-      const nm = after.match(new RegExp(GC_NUM_TOKEN));
-      let amount = nm ? gcParseNum(nm[0]) : null;
+      // 「4,477 不課税」のように直後が不課税の金額は軽油税であって車番合計ではない。
+      // OCRの並び順によっては軽油税がマーカーの直後に来ることがあるため、読み飛ばす。
+      const amtRe = new RegExp(GC_NUM_TOKEN, "g");
+      let amount = null, nm, amountEnd = mk.end;
+      while((nm = amtRe.exec(after))){
+        const follow = after.slice(nm.index + nm[0].length, nm.index + nm[0].length + 8).replace(/[\s　]/g, "");
+        if(/^(円)?不課[税稅]/.test(follow)) continue;   // 軽油税なので車番合計ではない
+        amount = gcParseNum(nm[0]);
+        amountEnd = mk.end + nm.index + nm[0].length;
+        break;
+      }
       // 直後に見つからない場合は、同じ行の中を探す(レイアウトによっては金額が左側に来ることがある)
       if(amount === null){
         const lineStart = text.lastIndexOf("\n", mk.start);
@@ -2028,12 +2042,11 @@
         const nm2 = line.match(new RegExp(GC_NUM_TOKEN + "(?![\\s\\S]*" + GC_NUM_TOKEN + ")"));
         if(nm2) amount = gcParseNum(nm2[0]);
       }
-      // 軽油税:前のマーカーの直後から、このマーカーの手前まで(=このカードの明細行)を対象にする
-      const detailStart = (i > 0) ? markers[i - 1].end : 0;
-      const dieselTax = extractDieselTax(text.slice(detailStart, mk.start));
+      const dieselTax = extractDieselTax(text.slice(prevAmountEnd, Math.max(amountEnd, mk.start)));
+      prevAmountEnd = Math.max(amountEnd, mk.end);
       const fuel = (amount !== null) ? (amount - dieselTax) : null;
       groups.push({ cardNo: mk.cardNo, amount: amount, dieselTax: dieselTax, fuel: fuel });
-    });
+    }
     return groups;
   }
   const gcIssueDateEl = el("gcIssueDate"), gcVendorEl = el("gcVendor"), gcFileEl = el("gcFile"),
