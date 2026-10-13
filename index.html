@@ -294,6 +294,15 @@
       <span class="fname" id="previewText">請求書発行月・拠点名・担当者名・取引先名・金額・PDFを確認してください</span>
     </div>
     <div class="msg-list" id="msgList"></div>
+    <!-- OCRで自動入力した場合のみ表示する確認欄。読み取り違いに気づかないまま
+         アップロードされるのを防ぐため、チェックするまでアップロードできない。 -->
+    <div id="ocrConfirmBox" style="display:none; margin:10px 0 4px;">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:400;
+                    background:var(--warn-bg); border:1px solid #F0DDA0; border-radius:8px; padding:10px 14px;">
+        <input type="checkbox" id="ocrConfirmCheck" style="width:auto;">
+        <span>上のファイル名（発行月・拠点名・取引先名・金額）をPDFと見比べて確認しました</span>
+      </label>
+    </div>
     <div class="actions">
       <button class="btn big" id="uploadBtn">共有フォルダへアップロード</button>
       <button class="btn secondary" id="clearFormBtn">入力をクリア</button>
@@ -769,6 +778,8 @@
     amountHintEl.textContent = digits ? Number(digits).toLocaleString("ja-JP") + " 円（税込）" : "";
     updatePreview();
   });
+  // 読み取り結果を手で直したら、確認のチェックは外してもう一度見てもらう
+  [issueDateEl, siteSelectEl, vendorEl, amountEl].forEach(e=> e.addEventListener("input", resetOcrConfirm));
   [issueDateEl, siteSelectEl, vendorEl, submitterNameEl].forEach(e=> e.addEventListener("input", updatePreview));
   [issueDateEl, siteSelectEl].forEach(e=> e.addEventListener("change", ()=>{
     updateTargetFolder().then(updatePreview);
@@ -847,6 +858,7 @@
     if(f) pvLoad(f); else pvClear();
     // 別のPDFに差し替えたら、前のOCR結果は無効になる
     ocrSuggested = { ran: false, amount: null, vendor: "", text: "" };
+    resetOcrConfirm();
     renderKeywordHint();
     updatePreview();
   });
@@ -868,8 +880,24 @@
   // 次に操作する箇所を1か所だけ光らせる。
   // 「フォルダを選んだ後、次に何を押せばよいか分からない」という声があったため、
   // 作業の順番に沿って案内を移動させる。
+  // OCRで自動入力した場合だけ、確認のチェックを求める。
+  // 手入力した場合は本人が値を入れているため、確認欄は出さない。
+  function needsOcrConfirm(){
+    return ocrSuggested.ran && (ocrSuggested.amount !== null || !!ocrSuggested.vendor);
+  }
+  function renderOcrConfirm(){
+    const box = el("ocrConfirmBox");
+    if(!box) return;
+    box.style.display = needsOcrConfirm() ? "block" : "none";
+  }
+  // 読み取り内容が変わったら、確認のチェックは外してやり直してもらう
+  function resetOcrConfirm(){
+    const c = el("ocrConfirmCheck");
+    if(c) c.checked = false;
+  }
+
   function updateNextStep(){
-    const targets = ["chooseFolderBtn", "pdfFileField", "ocrBtn", "uploadBtn"];
+    const targets = ["chooseFolderBtn", "pdfFileField", "ocrBtn", "ocrConfirmBox", "uploadBtn"];
     targets.forEach(id => {
       const t = el(id);
       if(t){ t.classList.remove("next-step", "next-step-box"); }
@@ -879,14 +907,20 @@
 
     let nextId = null;
     const hasFile = pdfFileEl.files && pdfFileEl.files.length > 0;
+    const filled = currentFilename().filled;
+    const confirmed = el("ocrConfirmCheck") && el("ocrConfirmCheck").checked;
     if(!folderHandle){
       nextId = "chooseFolderBtn";                      // まず共有フォルダを設定する
     }else if(!hasFile){
       nextId = "pdfFileField";                         // 次にPDFを選ぶ
-    }else if(!ocrSuggested.ran){
-      nextId = "ocrBtn";                               // PDFを選んだらOCRを押す
-    }else if(currentFilename().filled){
-      nextId = "uploadBtn";                            // 入力が揃ったらアップロード
+    }else if(!ocrSuggested.ran && !filled){
+      // PDFを選んだらOCRを勧める。ただし手入力で進める方もいるため、
+      // 入力が揃っていればOCRを飛ばして次へ案内する。
+      nextId = "ocrBtn";
+    }else if(needsOcrConfirm() && !confirmed){
+      nextId = "ocrConfirmBox";                        // 読み取り内容の確認を先に promptする
+    }else if(filled){
+      nextId = "uploadBtn";                            // 確認が済んだらアップロード
     }
     if(!nextId) return;                                // 入力の途中は案内しない(入力欄を邪魔しないため)
     const target = el(nextId);
@@ -899,6 +933,7 @@
     const data = currentFilename();
     msgList.innerHTML = "";
     const hasFile = pdfFileEl.files && pdfFileEl.files.length > 0;
+    renderOcrConfirm();
     updateNextStep();
     // ボタンはどんな状態でも常にクリックできるようにし（disabled属性は使わない）、
     // 不足があればクリック時にその場で理由を案内する。ここでは見た目のヒントのみ変える。
@@ -943,6 +978,7 @@
     pdfFileEl.value = ""; fileHint.textContent = "スキャンまたはダウンロードした請求書PDFを選択してください。";
     detectedAccount = { debit: "", subDebit: "", keyword: "", taxType: "" };
     ocrSuggested = { ran: false, amount: null, vendor: "", text: "" };
+    resetOcrConfirm();
     renderDetectedAccount();
     pvClear();
     updatePreview();
@@ -1095,6 +1131,13 @@
   uploadBtn.addEventListener("click", async ()=>{
     // 画面側でも操作を止めているが、念のためここでも確認する
     if(MAINTENANCE.on){ showToast("ただいまメンテナンス中です"); return; }
+    // OCRで自動入力した値は読み取り違いがありうるため、確認のチェックを必須にする
+    if(needsOcrConfirm() && !(el("ocrConfirmCheck") && el("ocrConfirmCheck").checked)){
+      addMsg("warn", "OCRで自動入力した内容をPDFと見比べて確認し、下のチェックを入れてからアップロードしてください。");
+      showToast("読み取り内容の確認にチェックを入れてください");
+      updateNextStep();
+      return;
+    }
     const data = currentFilename();
     if(!data.filled){ showToast("入力が不足しています"); return; }
     const file = pdfFileEl.files[0];
@@ -1475,6 +1518,8 @@
     box.appendChild(row);
   }
   amountEl.addEventListener("change", renderKeywordHint);
+  // 確認のチェックを入れたら、案内がアップロードボタンへ移るようにする
+  el("ocrConfirmCheck").addEventListener("change", updateNextStep);
 
   // 取引先ごとに指定された「金額キーワード」を返す(勘定科目マスタのH列)。
   // 既定の判定で金額を読めない請求書は、ここに語を登録すればその近くの金額が使われる。
@@ -1689,6 +1734,7 @@
       // OCRが提案した値を控えておく。アップロード時に実際の入力値と比べ、
       // 読み取れたかどうかを履歴へ記録する(金額キーワードの登録対象を洗い出すため)
       ocrSuggested = { ran: true, amount: amountC, vendor: vendorC || "", text: text };
+      resetOcrConfirm();   // 読み取り直したら確認はやり直し
       // 登録した金額キーワードが効いているかを画面で確認できるようにする。
       // 「登録したのに読めない」ときに、登録が届いていないのか語が合っていないのかを切り分けられる。
       if(amountKw){
